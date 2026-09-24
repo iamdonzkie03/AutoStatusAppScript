@@ -30,7 +30,14 @@ function onOpen(e) {
 
   SpreadsheetApp.flush();
 
-  // Check Active rows for missing required information.
+  // Add a manual menu for reliable validation on demand.
+  SpreadsheetApp.getUi()
+    .createMenu('Procurement Status')
+    .addItem('Validate Active Rows', 'checkActiveRequiredFields')
+    .addItem('Update All Statuses', 'updateAllStatuses')
+    .addToUi();
+
+  // Show a dialog when the spreadsheet opens.
   checkActiveRequiredFields();
 }
 
@@ -683,6 +690,10 @@ function updateStatusForRow(
    * Submission of Bids exists
    * Submission of Bids is on or before today
    * BAC Resolution is blank
+   *
+   * IMPORTANT: Pre-Procurement Conference, Pre-Bid Conference,
+   * and Project ID are NOT required to calculate Active. They
+   * are checked separately by the validation prompt.
    *************************************************************/
   else if (
 
@@ -996,11 +1007,13 @@ function parseSheetDate(value) {
  ***************************************************************/
 function startOfDay(date) {
 
-  const result =
-    new Date(date);
+  const result = new Date(date);
 
+  result.setHours(0, 0, 0, 0);
 
-  result.setHours(
+  return result;
+}
+
 
 /***************************************************************
  * ACTIVE STATUS REQUIRED-FIELD VALIDATION
