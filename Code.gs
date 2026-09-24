@@ -343,6 +343,9 @@ function getHeaderMap(sheet) {
       case "PRE-PROCUREMENT":
       case "PRE PROCUREMENT":
       case "PREPROCUREMENT":
+      case "PRE-PROCUREMENT CONFERENCE":
+      case "PRE PROCUREMENT CONFERENCE":
+      case "PREPROCUREMENT CONFERENCE":
 
         map.PRE_PROCUREMENT =
           column;
