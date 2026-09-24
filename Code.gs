@@ -26,21 +26,10 @@ const SHEET_NAME = "Data List";
  * Updates all statuses whenever the spreadsheet is opened.
  */
 function onOpen(e) {
-  // The custom menu and modal are intended to run from the spreadsheet UI.
+  // Runs automatically when the spreadsheet is opened.
+  // No custom menu is created.
   if (!e) return;
 
-  try {
-    SpreadsheetApp.getUi()
-      .createMenu("Procurement Status")
-      .addItem("Validate Active Rows", "checkActiveRequiredFields")
-      .addItem("Test Active Missing-Data Popup", "testActiveRequiredFieldsDialog")
-      .addItem("Update All Statuses", "updateAllStatuses")
-      .addToUi();
-  } catch (error) {
-    console.log("Unable to create Procurement Status menu: " + error.message);
-  }
-
-  // Recalculate first, then validate Active rows and show the modal.
   try {
     updateAllStatuses();
     SpreadsheetApp.flush();
@@ -56,12 +45,13 @@ function onOpen(e) {
  * ON EDIT
  * ============================================================
  *
- * IMPORTANT:
- * This function is designed to be used by an INSTALLABLE
- * spreadsheet Edit trigger. An installable trigger has the
- * authorization needed to display the modal dialog.
+ * This is the main edit handler.
  *
- * To install it, run setupProcurementTriggers() once.
+ * IMPORTANT:
+ * To display a modal after an edit, this function must be
+ * installed as a Spreadsheet -> On edit trigger.
+ *
+ * Do not create any custom menu for this feature.
  */
 function onEdit(e) {
   if (!e || !e.range) return;
@@ -92,154 +82,60 @@ function onEdit(e) {
       invalidDateFields.push("Row " + row + ": " + field);
     });
 
-    updateStatusForRow(
-      sheet,
-      row,
-      headerMap
-    );
+    updateStatusForRow(sheet, row, headerMap);
   }
 
   SpreadsheetApp.flush();
 
+  // Invalid date input is also shown in the same dialog system.
   if (invalidDateFields.length > 0) {
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Enter dates using MMMM d, yyyy (example: September 24, 2026).\\n\\n" +
-      invalidDateFields.join("\\n"),
-      "Invalid Date Format",
-      8
-    );
+    showInvalidDateDialog(invalidDateFields);
   }
 
-  // Show the same modal used during onOpen.
+  // Validate Active rows after the status has been recalculated.
   showActiveMissingDataModal();
 }
 
 
 /**
- * ============================================================
- * INSTALLABLE TRIGGER SETUP
- * ============================================================
- *
- * Run this function ONCE manually from Apps Script.
- * It removes duplicate triggers created by this script and
- * creates one spreadsheet Open trigger and one Edit trigger.
+ * Displays a dialog when one or more dates do not use:
+ * MMMM d, yyyy
  */
-function setupProcurementTriggers() {
-  const ss = SpreadsheetApp.getActive();
+function showInvalidDateDialog(invalidDateFields) {
+  const rowsHtml = invalidDateFields.map(function(item) {
+    return '<div class="row-item">' + escapeHtml(item) + '</div>';
+  }).join("");
 
-  ScriptApp.getProjectTriggers().forEach(function(trigger) {
-    const handler = trigger.getHandlerFunction();
+  const html = HtmlService.createHtmlOutput(
+    '<!DOCTYPE html>' +
+    '<html><head><base target="_top">' +
+    '<style>' +
+      '*{box-sizing:border-box}' +
+      'html,body{margin:0;padding:0;width:100%;height:100%;font-family:Arial,sans-serif;color:#202124}' +
+      'body{display:flex;align-items:center;justify-content:center;padding:24px}' +
+      '.dialog{width:100%;max-width:510px;text-align:center}' +
+      '.icon{width:48px;height:48px;margin:0 auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fdecea;color:#b3261e;font-size:25px;font-weight:bold}' +
+      'h2{margin:0;font-size:20px;font-weight:600}' +
+      '.intro{margin:8px 0 16px;color:#5f6368;font-size:13px;line-height:1.45}' +
+      '.list{text-align:left;max-height:220px;overflow-y:auto;border:1px solid #dadce0;border-radius:8px;background:#f8f9fa;padding:8px}' +
+      '.row-item;background:#fff' +
+      '.row-item{background:#fff;border:1px solid #e0e3e7;border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:13px;line-height:1.4}' +
+      '.row-item:last-child{margin-bottom:0}' +
+      '.note{margin:16px 0 13px;color:#5f6368;font-size:12px}' +
+      'button{min-width:100px;border:0;border-radius:6px;padding:9px 22px;background:#1a73e8;color:#fff;font-size:13px;font-weight:600;cursor:pointer}' +
+    '</style></head>' +
+    '<body><div class="dialog">' +
+      '<div class="icon">!</div>' +
+      '<h2>Invalid Date Format</h2>' +
+      '<p class="intro">Please enter dates using <b>MMMM d, yyyy</b>.<br>Example: September 24, 2026</p>' +
+      '<div class="list">' + rowsHtml + '</div>' +
+      '<p class="note">Please correct the date before continuing.</p>' +
+      '<button onclick="google.script.host.close()">OK</button>' +
+    '</div></body></html>'
+  ).setWidth(560).setHeight(390);
 
-    if (
-      handler === "procurementOnOpen" ||
-      handler === "procurementOnEdit"
-    ) {
-      ScriptApp.deleteTrigger(trigger);
-    }
-  });
-
-  ScriptApp.newTrigger("procurementOnOpen")
-    .forSpreadsheet(ss)
-    .onOpen()
-    .create();
-
-  ScriptApp.newTrigger("procurementOnEdit")
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
-  SpreadsheetApp.getUi().alert(
-    "Procurement Status triggers installed.",
-    "The modal will now run when the spreadsheet opens and after edits.",
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  SpreadsheetApp.getUi().showModalDialog(html, "Invalid Date Format");
 }
-
-
-/**
- * ============================================================
- * INSTALLABLE OPEN HANDLER
- * ============================================================
- */
-function procurementOnOpen(e) {
-  onOpen(e);
-}
-
-
-/**
- * ============================================================
- * INSTALLABLE EDIT HANDLER
- * ============================================================
- */
-function procurementOnEdit(e) {
-  onEdit(e);
-}
-
-
-/**
- * ============================================================
- * ON EDIT
- * ============================================================
- *
- * Updates the affected row whenever a user edits the sheet.
- */
-function onEdit(e) {
-
-  if (!e || !e.range) return;
-
-  const sheet = e.range.getSheet();
-
-  if (sheet.getName() !== SHEET_NAME) return;
-
-  const headerMap = getHeaderMap(sheet);
-
-  if (!headerMap.STATUS) return;
-
-  const firstRow = e.range.getRow();
-  const numberOfRows = e.range.getNumRows();
-
-  if (firstRow === 1) return;
-
-  const invalidDateFields = [];
-
-  for (let i = 0; i < numberOfRows; i++) {
-
-    const row = firstRow + i;
-
-    if (row > 1) {
-      const invalidFields = normalizeInputDates(sheet, row, headerMap);
-
-      invalidFields.forEach(function(field) {
-        invalidDateFields.push("Row " + row + ": " + field);
-      });
-
-      updateStatusForRow(
-        sheet,
-        row,
-        headerMap
-      );
-    }
-  }
-
-  SpreadsheetApp.flush();
-
-  if (invalidDateFields.length > 0) {
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Enter dates using MMMM d, yyyy (example: September 24, 2026).\\n\\n" +
-      invalidDateFields.join("\\n"),
-      "Invalid Date Format",
-      8
-    );
-  }
-
-  /*
-   * Validate Active rows after the status has been recalculated.
-   * A toast is used because simple onEdit cannot reliably display
-   * modal dialogs.
-   */
-  showActiveMissingDataToast(sheet);
-}
-
 
 /**
  * ============================================================
@@ -386,81 +282,6 @@ function getHeaderMap(sheet) {
  * ============================================================
  * CHECK REQUIRED DATA FOR ACTIVE STATUS
  * ============================================================
- *
- * For rows with Status = Active:
- *
- * Pre-procurement      → required
- * Pre-bid Conference   → required
- * Project ID           → required
- *
- * A prompt will appear if any required field is blank.
- */
-function getActiveMissingData(sheet) {
-  const map = getHeaderMap(sheet);
-
-  // STATUS plus the three validation columns must exist.
-  if (
-    !map.STATUS ||
-    !map.PRE_PROCUREMENT ||
-    !map.PRE_BID_CONFERENCE ||
-    !map.PROJECT_ID
-  ) {
-    return [];
-  }
-
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
-
-  const lastColumn = sheet.getLastColumn();
-  const data = sheet
-    .getRange(2, 1, lastRow - 1, lastColumn)
-    .getValues();
-
-  const missingRows = [];
-
-  data.forEach(function(row, index) {
-    const actualRow = index + 2;
-    const status = String(row[map.STATUS - 1] || "").trim().toUpperCase();
-
-    if (status !== "ACTIVE") {
-      return;
-    }
-
-    const missingFields = [];
-
-    if (!hasValue(row[map.PRE_PROCUREMENT - 1])) {
-      missingFields.push("PRE-PROCUREMENT CONFERENCE");
-    }
-
-    if (!hasValue(row[map.PRE_BID_CONFERENCE - 1])) {
-      missingFields.push("PRE-BID CONFERENCE");
-    }
-
-    if (!hasValue(row[map.PROJECT_ID - 1])) {
-      missingFields.push("PROJECT ID");
-    }
-
-    if (missingFields.length > 0) {
-      missingRows.push({
-        row: actualRow,
-        fields: missingFields
-      });
-    }
-  });
-
-  return missingRows;
-}
-
-/**
- * Displays a modal dialog. Used by onOpen and the custom menu.
- */
-function checkActiveRequiredFields() {
-  showActiveMissingDataModal();
-}
-
-/**
- * Finds Active rows with missing required fields and displays
- * the centered modal when necessary.
  */
 function showActiveMissingDataModal() {
   const sheet = SpreadsheetApp
