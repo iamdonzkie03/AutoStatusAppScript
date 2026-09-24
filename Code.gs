@@ -535,13 +535,16 @@ function normalizeHeader(value) {
  * NORMALIZE INPUT DATES
  * ============================================================
  *
- * The following columns accept dates entered as:
+ * The following columns accept either:
  *
- * MMMM d, yyyy
- * Example: September 24, 2026
+ * 1. MMMM d, yyyy
+ *    Example: September 24, 2026
+ * 2. N/A
+ * 3. NA
+ * 4. Not Applicable
  *
- * If the value is entered as text, it is converted to a real
- * Google Sheets Date value and displayed using the same format.
+ * Accepted N/A values are treated as intentional non-date entries
+ * and are not reported as invalid date formats.
  */
 function normalizeInputDates(sheet, row, map) {
 
@@ -574,6 +577,11 @@ function normalizeInputDates(sheet, row, map) {
       return;
     }
 
+    /* Accept N/A, NA, and Not Applicable as valid non-date values. */
+    if (typeof value === "string" && isAcceptedNonDateValue(value)) {
+      return;
+    }
+
     /* Convert text entered as MMMM d, yyyy into a real Date. */
     if (typeof value === "string") {
       const parsed = parseInputDate(value);
@@ -600,7 +608,7 @@ function parseInputDate(value) {
 
   const text = String(value).trim();
 
-  if (!text) return null;
+  if (!text || isAcceptedNonDateValue(text)) return null;
 
   const match = text.match(
     /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})$/i
@@ -629,6 +637,28 @@ function parseInputDate(value) {
   }
 
   return startOfDay(date);
+}
+
+
+/**
+ * ============================================================
+ * ACCEPTED NON-DATE VALUES
+ * ============================================================
+ *
+ * These values are valid alternatives to a date in the date
+ * validation columns:
+ * - N/A
+ * - NA
+ * - Not Applicable
+ */
+function isAcceptedNonDateValue(value) {
+  const text = String(value).trim().toUpperCase();
+
+  return (
+    text === "N/A" ||
+    text === "NA" ||
+    text === "NOT APPLICABLE"
+  );
 }
 
 
@@ -1000,11 +1030,20 @@ function hasValue(value) {
  * September 24, 2026
  * September 24 2026
  * Sep 24, 2026
+ * N/A / NA / Not Applicable (returns null)
  * Google Sheets Date objects
  */
 function parseSheetDate(value) {
 
   if (!value) return null;
+
+  /*
+   * Accepted non-date values.
+   * These are intentionally treated as having no date.
+   */
+  if (isAcceptedNonDateValue(value)) {
+    return null;
+  }
 
 
   /*
