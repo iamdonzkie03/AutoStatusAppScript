@@ -26,26 +26,37 @@ const SHEET_NAME = "Data List";
  * Updates all statuses whenever the spreadsheet is opened.
  */
 function onOpen(e) {
+  // Build the custom menu FIRST so it still appears even if a status
+  // calculation encounters a data/header problem.
+  if (e) {
+    try {
+      const ui = SpreadsheetApp.getUi();
 
-  updateAllStatuses();
-  SpreadsheetApp.flush();
+      ui.createMenu("Procurement Status")
+        .addItem("Validate Active Rows", "checkActiveRequiredFields")
+        .addItem("Test Active Missing-Data Popup", "testActiveRequiredFieldsDialog")
+        .addItem("Update All Statuses", "updateAllStatuses")
+        .addToUi();
 
-  // Manual execution from the Apps Script editor has no UI context.
-  if (!e) return;
+      // Show the missing-data popup after the menu has been created.
+      try {
+        checkActiveRequiredFields();
+      } catch (error) {
+        console.log("Active-row validation skipped: " + error.message);
+      }
 
+    } catch (error) {
+      console.log("Spreadsheet UI is unavailable: " + error.message);
+    }
+  }
+
+  // Keep status updating separate from menu creation so one failure
+  // cannot prevent the Procurement Status menu from being added.
   try {
-    const ui = SpreadsheetApp.getUi();
-
-    ui.createMenu("Procurement Status")
-      .addItem("Validate Active Rows", "checkActiveRequiredFields")
-      .addItem("Test Active Missing-Data Popup", "testActiveRequiredFieldsDialog")
-      .addItem("Update All Statuses", "updateAllStatuses")
-      .addToUi();
-
-    checkActiveRequiredFields();
-
+    updateAllStatuses();
+    SpreadsheetApp.flush();
   } catch (error) {
-    console.log("Spreadsheet UI is unavailable: " + error.message);
+    console.log("Status update skipped: " + error.message);
   }
 }
 
