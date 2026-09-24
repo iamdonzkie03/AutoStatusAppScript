@@ -15,7 +15,55 @@
  * - Header names are matched case-insensitively.
  */
 
+
 const SHEET_NAME = "Data List";
+
+
+/**
+ * ============================================================
+ * SETUP INSTALLABLE TRIGGERS
+ * ============================================================
+ *
+ * Run setupTriggers() ONCE manually from Apps Script.
+ *
+ * This creates installable triggers for:
+ * - Spreadsheet open
+ * - Spreadsheet edit
+ *
+ * Installable triggers are required because modal dialogs use
+ * SpreadsheetApp.getUi(), which cannot be reliably called from
+ * a simple onEdit trigger.
+ */
+function setupTriggers() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Remove existing triggers for these handlers first so we
+  // do not create duplicate popups.
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+    const handler = trigger.getHandlerFunction();
+
+    if (handler === "onOpen" || handler === "onEdit") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  ScriptApp.newTrigger("onOpen")
+    .forSpreadsheet(ss)
+    .onOpen()
+    .create();
+
+  ScriptApp.newTrigger("onEdit")
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  SpreadsheetApp.getUi().alert(
+    "Setup Complete",
+    "Installable triggers for ON OPEN and ON EDIT have been created.\n\nClose and reopen the spreadsheet to test the popup.",
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
 
 
 /**
