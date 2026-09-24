@@ -26,7 +26,17 @@ const SHEET_NAME = "Data List";
  * Updates all statuses whenever the spreadsheet is opened.
  */
 function onOpen(e) {
+  const ui = SpreadsheetApp.getUi();
+
+  ui.createMenu("Procurement Status")
+    .addItem("Validate Active Rows", "checkActiveRequiredFields")
+    .addItem("Update All Statuses", "updateAllStatuses")
+    .addToUi();
+
   updateAllStatuses();
+  SpreadsheetApp.flush();
+
+  // Modal dialogs are supported from onOpen.
   checkActiveRequiredFields();
 }
 
@@ -69,11 +79,12 @@ function onEdit(e) {
   }
 
   /*
-   * Check Active rows for missing
-   * Pre-procurement, Pre-bid Conference,
-   * and Project ID.
+   * Validate Active rows after the status has been recalculated.
+   * A toast is used because simple onEdit cannot reliably display
+   * modal dialogs.
    */
-  checkActiveRequiredFields();
+  SpreadsheetApp.flush();
+  showActiveMissingDataToast(sheet);
 }
 
 
@@ -143,12 +154,10 @@ function getHeaderMap(sheet) {
 
     switch (normalized) {
 
-    case "PRE-PROCUREMENT CONFERENCE":
     case "PRE PROCUREMENT CONFERENCE":
     map.PRE_PROCUREMENT = column;
     break;
 
-    case "PRE-BID CONFERENCE":
     case "PRE BID CONFERENCE":
     map.PRE_BID_CONFERENCE = column;
     break;
@@ -161,7 +170,6 @@ function getHeaderMap(sheet) {
         map.PPMP_TOTAL_COST = column;
         break;
 
-      case "PR NO.":
       case "PR NO":
         map.PR_NO = column;
         break;
@@ -184,7 +192,7 @@ function getHeaderMap(sheet) {
         map.ELIGIBILITY_SCREENING = column;
         break;
 
-      case "BAC RESOLUTION NO.":
+      case "BAC RESOLUTION NO":
         map.BAC_RESOLUTION = column;
         break;
 
@@ -201,7 +209,6 @@ function getHeaderMap(sheet) {
         break;
 
       case "PO NO":
-      case "PO NO.":
         map.PO_NO = column;
         break;
 
@@ -234,31 +241,23 @@ function getHeaderMap(sheet) {
  *
  * A prompt will appear if any required field is blank.
  */
-function checkActiveRequiredFields() {
-
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEET_NAME);
-
-  if (!sheet) return;
-
+function getActiveMissingData(sheet) {
   const map = getHeaderMap(sheet);
 
-  // Make sure required columns exist
+  // STATUS plus the three validation columns must exist.
   if (
     !map.STATUS ||
     !map.PRE_PROCUREMENT ||
     !map.PRE_BID_CONFERENCE ||
     !map.PROJECT_ID
   ) {
-    return;
+    return [];
   }
 
   const lastRow = sheet.getLastRow();
-
-  if (lastRow < 2) return;
+  if (lastRow < 2) return [];
 
   const lastColumn = sheet.getLastColumn();
-
   const data = sheet
     .getRange(2, 1, lastRow - 1, lastColumn)
     .getValues();
@@ -266,48 +265,28 @@ function checkActiveRequiredFields() {
   const missingRows = [];
 
   data.forEach(function(row, index) {
-
     const actualRow = index + 2;
+    const status = String(row[map.STATUS - 1] || "").trim().toUpperCase();
 
-    const status = String(
-      row[map.STATUS - 1] || ""
-    ).trim();
-
-    /*
-     * Only check rows with ACTIVE status.
-     */
-    if (status.toUpperCase() !== "Active") {
+    if (status !== "ACTIVE") {
       return;
     }
 
-    const preProcurement =
-      row[map.PRE_PROCUREMENT - 1];
-
-    const preBidConference =
-      row[map.PRE_BID_CONFERENCE - 1];
-
-    const projectID =
-      row[map.PROJECT_ID - 1];
-
     const missingFields = [];
 
-    if (!hasValue(preProcurement)) {
+    if (!hasValue(row[map.PRE_PROCUREMENT - 1])) {
       missingFields.push("PRE-PROCUREMENT CONFERENCE");
     }
 
-    if (!hasValue(preBidConference)) {
+    if (!hasValue(row[map.PRE_BID_CONFERENCE - 1])) {
       missingFields.push("PRE-BID CONFERENCE");
     }
 
-    if (!hasValue(projectID)) {
+    if (!hasValue(row[map.PROJECT_ID - 1])) {
       missingFields.push("PROJECT ID");
     }
 
-    /*
-     * Store the row and the missing fields.
-     */
     if (missingFields.length > 0) {
-
       missingRows.push({
         row: actualRow,
         fields: missingFields
@@ -315,23 +294,60 @@ function checkActiveRequiredFields() {
     }
   });
 
+  return missingRows;
+}
 
-  /*
-   * No missing data.
-   */
+/**
+ * Displays a modal dialog. Used by onOpen and the custom menu.
+ */
+function checkActiveRequiredFields() {
+  const sheet = SpreadsheetApp
+    .getActiveSpreadsheet()
+    .getSheetByName(SHEET_NAME);
+
+  if (!sheet) return;
+
+  const missingRows = getActiveMissingData(sheet);
+
   if (missingRows.length === 0) {
     return;
   }
 
+  SpreadsheetApp.getUi().alert(
+    "Required Data Missing",
+    buildMissingDataMessage(missingRows),
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
 
-  /*
-   * Build the prompt message.
-   */
+/**
+ * Displays an edit-time toast.
+ *
+ * This is intentionally separate from checkActiveRequiredFields()
+ * because simple onEdit triggers cannot reliably show modal dialogs.
+ */
+function showActiveMissingDataToast(sheet) {
+  const missingRows = getActiveMissingData(sheet);
+
+  if (missingRows.length === 0) {
+    return;
+  }
+
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    buildMissingDataMessage(missingRows),
+    "Active Status - Required Data Missing",
+    8
+  );
+}
+
+/**
+ * Builds the message shared by the modal and toast.
+ */
+function buildMissingDataMessage(missingRows) {
   let message =
     "The following ACTIVE row(s) have missing required data:\n\n";
 
   missingRows.forEach(function(item) {
-
     message +=
       "Row " +
       item.row +
@@ -343,15 +359,7 @@ function checkActiveRequiredFields() {
   message +=
     "\nPlease enter the required data for the Active Status row(s).";
 
-
-  /*
-   * Display prompt.
-   */
-  SpreadsheetApp.getUi().alert(
-    "Required Data Missing",
-    message,
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  return message;
 }
 
 /**
@@ -364,6 +372,7 @@ function normalizeHeader(value) {
   return String(value)
     .trim()
     .toUpperCase()
+    .replace(/[.\-_/]+/g, " ")
     .replace(/\s+/g, " ");
 }
 
