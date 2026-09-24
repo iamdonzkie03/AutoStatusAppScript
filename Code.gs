@@ -282,6 +282,86 @@ function getHeaderMap(sheet) {
  * ============================================================
  * CHECK REQUIRED DATA FOR ACTIVE STATUS
  * ============================================================
+ *
+ * Every row whose STATUS is ACTIVE must contain:
+ * - Pre-Procurement Conference
+ * - Pre-Bid Conference
+ * - Project ID
+ *
+ * Blank values are detected using the actual cell value,
+ * so empty cells, empty strings, and whitespace are treated
+ * as missing.
+ */
+function getActiveMissingData(sheet) {
+  const map = getHeaderMap(sheet);
+
+  // Validation cannot run unless all required headers exist.
+  if (
+    !map.STATUS ||
+    !map.PRE_PROCUREMENT ||
+    !map.PRE_BID_CONFERENCE ||
+    !map.PROJECT_ID
+  ) {
+    return [];
+  }
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastRow < 2 || lastColumn < 1) {
+    return [];
+  }
+
+  const values = sheet
+    .getRange(2, 1, lastRow - 1, lastColumn)
+    .getValues();
+
+  const missingRows = [];
+
+  values.forEach(function(row, index) {
+    const actualRow = index + 2;
+
+    // Normalize the status so "Active", "ACTIVE", etc. are equivalent.
+    const status = String(
+      row[map.STATUS - 1] === null ||
+      row[map.STATUS - 1] === undefined
+        ? ""
+        : row[map.STATUS - 1]
+    ).trim().toUpperCase();
+
+    if (status !== "ACTIVE") {
+      return;
+    }
+
+    const missingFields = [];
+
+    if (!hasValue(row[map.PRE_PROCUREMENT - 1])) {
+      missingFields.push("PRE-PROCUREMENT CONFERENCE");
+    }
+
+    if (!hasValue(row[map.PRE_BID_CONFERENCE - 1])) {
+      missingFields.push("PRE-BID CONFERENCE");
+    }
+
+    if (!hasValue(row[map.PROJECT_ID - 1])) {
+      missingFields.push("PROJECT ID");
+    }
+
+    if (missingFields.length > 0) {
+      missingRows.push({
+        row: actualRow,
+        fields: missingFields
+      });
+    }
+  });
+
+  return missingRows;
+}
+
+/**
+ * ============================================================
+ * CHECK REQUIRED DATA FOR ACTIVE STATUS
+ * ============================================================
  */
 function showActiveMissingDataModal() {
   const sheet = SpreadsheetApp
