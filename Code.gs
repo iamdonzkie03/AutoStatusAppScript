@@ -31,7 +31,7 @@ function onOpen(e) {
   SpreadsheetApp.flush();
 
   // Check Active rows for missing required information.
-  checkActiveRequiredFieldsOnOpen();
+  checkActiveRequiredFields();
 }
 
 
@@ -1001,3 +1001,181 @@ function startOfDay(date) {
 
 
   result.setHours(
+
+/***************************************************************
+ * ACTIVE STATUS REQUIRED-FIELD VALIDATION
+ *
+ * IMPORTANT:
+ * These fields are NOT part of the Active-status calculation.
+ * An item can still be Active when they are blank.
+ *
+ * They are checked separately so missing data is reported
+ * without stopping the status automation.
+ ***************************************************************/
+
+function getActiveMissingData(sheet) {
+
+  const map = getHeaderMap(sheet);
+
+  if (!map.STATUS) {
+    return {
+      rows: [],
+      error: "STATUS column was not found."
+    };
+  }
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastRow < 2 || lastColumn < 1) {
+    return {
+      rows: [],
+      error: ""
+    };
+  }
+
+  const data = sheet
+    .getRange(2, 1, lastRow - 1, lastColumn)
+    .getDisplayValues();
+
+  const missingRows = [];
+
+  data.forEach(function(row, index) {
+
+    const actualRow = index + 2;
+
+    const status = normalizeText(
+      getValue(row, row, map.STATUS)
+    );
+
+    if (status !== "ACTIVE") {
+      return;
+    }
+
+    const missingFields = [];
+
+    /*
+     * IMPORTANT:
+     * If a required column is not found, treat its value
+     * as blank instead of trying to read row[undefined - 1].
+     * This prevents the script from crashing.
+     */
+
+    const preProcurement = map.PRE_PROCUREMENT
+      ? getValue(row, row, map.PRE_PROCUREMENT)
+      : "";
+
+    const preBidConference = map.PRE_BID_CONFERENCE
+      ? getValue(row, row, map.PRE_BID_CONFERENCE)
+      : "";
+
+    const projectID = map.PROJECT_ID
+      ? getValue(row, row, map.PROJECT_ID)
+      : "";
+
+    if (!hasValue(preProcurement)) {
+      missingFields.push("PRE-PROCUREMENT CONFERENCE");
+    }
+
+    if (!hasValue(preBidConference)) {
+      missingFields.push("PRE-BID CONFERENCE");
+    }
+
+    if (!hasValue(projectID)) {
+      missingFields.push("PROJECT ID");
+    }
+
+    if (missingFields.length > 0) {
+      missingRows.push({
+        row: actualRow,
+        fields: missingFields
+      });
+    }
+  });
+
+  return {
+    rows: missingRows,
+    error: ""
+  };
+}
+
+
+/***************************************************************
+ * ON OPEN VALIDATION
+ ***************************************************************/
+function checkActiveRequiredFields() {
+
+  const sheet =
+    SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+
+  if (!sheet) return;
+
+  const result =
+    getActiveMissingData(sheet);
+
+  if (
+    result.error ||
+    result.rows.length === 0
+  ) {
+    return;
+  }
+
+  SpreadsheetApp.getUi().alert(
+    "Required Data Missing",
+    buildActiveMissingMessage(result.rows),
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+
+/***************************************************************
+ * ON EDIT VALIDATION
+ *
+ * Simple onEdit triggers should use a toast rather than
+ * SpreadsheetApp.getUi().alert().
+ ***************************************************************/
+function showActiveMissingDataToast(sheet) {
+
+  if (!sheet) return;
+
+  const result =
+    getActiveMissingData(sheet);
+
+  if (
+    result.error ||
+    result.rows.length === 0
+  ) {
+    return;
+  }
+
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    buildActiveMissingMessage(result.rows),
+    "Active Status - Required Data Missing",
+    8
+  );
+}
+
+
+/***************************************************************
+ * BUILD VALIDATION MESSAGE
+ ***************************************************************/
+function buildActiveMissingMessage(rows) {
+
+  let message =
+    "The following ACTIVE row(s) have missing required data:\n\n";
+
+  rows.forEach(function(item) {
+
+    message +=
+      "Row " +
+      item.row +
+      ": " +
+      item.fields.join(", ") +
+      "\n";
+  });
+
+  message +=
+    "\nPlease enter the required data for the Active Status row(s).";
+
+  return message;
+}
