@@ -65,12 +65,18 @@ function onEdit(e) {
 
   if (firstRow === 1) return;
 
+  const invalidDateFields = [];
+
   for (let i = 0; i < numberOfRows; i++) {
 
     const row = firstRow + i;
 
     if (row > 1) {
-      normalizeInputDates(sheet, row, headerMap);
+      const invalidFields = normalizeInputDates(sheet, row, headerMap);
+
+      invalidFields.forEach(function(field) {
+        invalidDateFields.push("Row " + row + ": " + field);
+      });
 
       updateStatusForRow(
         sheet,
@@ -80,12 +86,22 @@ function onEdit(e) {
     }
   }
 
+  SpreadsheetApp.flush();
+
+  if (invalidDateFields.length > 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      "Enter dates using MMMM d, yyyy (example: September 24, 2026).\\n\\n" +
+      invalidDateFields.join("\\n"),
+      "Invalid Date Format",
+      8
+    );
+  }
+
   /*
    * Validate Active rows after the status has been recalculated.
    * A toast is used because simple onEdit cannot reliably display
    * modal dialogs.
    */
-  SpreadsheetApp.flush();
   showActiveMissingDataToast(sheet);
 }
 
@@ -396,14 +412,18 @@ function normalizeHeader(value) {
 function normalizeInputDates(sheet, row, map) {
 
   const dateColumns = [
-    map.PRE_PROCUREMENT,
-    map.PRE_BID_CONFERENCE,
-    map.POSTING_DATE,
-    map.ELIGIBILITY_SCREENING,
-    map.SUBMISSION_OF_BIDS
+    { column: map.PRE_PROCUREMENT, name: "PRE-PROCUREMENT CONFERENCE" },
+    { column: map.PRE_BID_CONFERENCE, name: "PRE-BID CONFERENCE" },
+    { column: map.POSTING_DATE, name: "POSTING DATE" },
+    { column: map.ELIGIBILITY_SCREENING, name: "ELIGIBILITY SCREENING" },
+    { column: map.SUBMISSION_OF_BIDS, name: "SUBMISSION OF BIDS" }
   ];
 
-  dateColumns.forEach(function(column) {
+  const invalidFields = [];
+
+  dateColumns.forEach(function(item) {
+
+    const column = item.column;
 
     if (!column) return;
 
@@ -427,9 +447,13 @@ function normalizeInputDates(sheet, row, map) {
       if (parsed) {
         cell.setValue(parsed);
         cell.setNumberFormat("mmmm d, yyyy");
+      } else {
+        invalidFields.push(item.name);
       }
     }
   });
+
+  return invalidFields;
 }
 
 /**
