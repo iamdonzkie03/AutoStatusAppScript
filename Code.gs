@@ -26,38 +26,153 @@ const SHEET_NAME = "Data List";
  * Updates all statuses whenever the spreadsheet is opened.
  */
 function onOpen(e) {
-  // Build the custom menu FIRST so it still appears even if a status
-  // calculation encounters a data/header problem.
-  if (e) {
-    try {
-      const ui = SpreadsheetApp.getUi();
+  // The custom menu and modal are intended to run from the spreadsheet UI.
+  if (!e) return;
 
-      ui.createMenu("Procurement Status")
-        .addItem("Validate Active Rows", "checkActiveRequiredFields")
-        .addItem("Test Active Missing-Data Popup", "testActiveRequiredFieldsDialog")
-        .addItem("Update All Statuses", "updateAllStatuses")
-        .addToUi();
-
-      // Show the missing-data popup after the menu has been created.
-      try {
-        checkActiveRequiredFields();
-      } catch (error) {
-        console.log("Active-row validation skipped: " + error.message);
-      }
-
-    } catch (error) {
-      console.log("Spreadsheet UI is unavailable: " + error.message);
-    }
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu("Procurement Status")
+      .addItem("Validate Active Rows", "checkActiveRequiredFields")
+      .addItem("Test Active Missing-Data Popup", "testActiveRequiredFieldsDialog")
+      .addItem("Update All Statuses", "updateAllStatuses")
+      .addToUi();
+  } catch (error) {
+    console.log("Unable to create Procurement Status menu: " + error.message);
   }
 
-  // Keep status updating separate from menu creation so one failure
-  // cannot prevent the Procurement Status menu from being added.
+  // Recalculate first, then validate Active rows and show the modal.
   try {
     updateAllStatuses();
     SpreadsheetApp.flush();
+    showActiveMissingDataModal();
   } catch (error) {
-    console.log("Status update skipped: " + error.message);
+    console.log("onOpen validation skipped: " + error.message);
   }
+}
+
+
+/**
+ * ============================================================
+ * ON EDIT
+ * ============================================================
+ *
+ * IMPORTANT:
+ * This function is designed to be used by an INSTALLABLE
+ * spreadsheet Edit trigger. An installable trigger has the
+ * authorization needed to display the modal dialog.
+ *
+ * To install it, run setupProcurementTriggers() once.
+ */
+function onEdit(e) {
+  if (!e || !e.range) return;
+
+  const sheet = e.range.getSheet();
+
+  if (sheet.getName() !== SHEET_NAME) return;
+  if (e.range.getRow() === 1) return;
+
+  const headerMap = getHeaderMap(sheet);
+
+  if (!headerMap.STATUS) return;
+
+  const firstRow = e.range.getRow();
+  const numberOfRows = e.range.getNumRows();
+  const invalidDateFields = [];
+
+  for (let i = 0; i < numberOfRows; i++) {
+    const row = firstRow + i;
+
+    const invalidFields = normalizeInputDates(
+      sheet,
+      row,
+      headerMap
+    );
+
+    invalidFields.forEach(function(field) {
+      invalidDateFields.push("Row " + row + ": " + field);
+    });
+
+    updateStatusForRow(
+      sheet,
+      row,
+      headerMap
+    );
+  }
+
+  SpreadsheetApp.flush();
+
+  if (invalidDateFields.length > 0) {
+    SpreadsheetApp.getActiveSpreadsheet().toast(
+      "Enter dates using MMMM d, yyyy (example: September 24, 2026).\\n\\n" +
+      invalidDateFields.join("\\n"),
+      "Invalid Date Format",
+      8
+    );
+  }
+
+  // Show the same modal used during onOpen.
+  showActiveMissingDataModal();
+}
+
+
+/**
+ * ============================================================
+ * INSTALLABLE TRIGGER SETUP
+ * ============================================================
+ *
+ * Run this function ONCE manually from Apps Script.
+ * It removes duplicate triggers created by this script and
+ * creates one spreadsheet Open trigger and one Edit trigger.
+ */
+function setupProcurementTriggers() {
+  const ss = SpreadsheetApp.getActive();
+
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+    const handler = trigger.getHandlerFunction();
+
+    if (
+      handler === "procurementOnOpen" ||
+      handler === "procurementOnEdit"
+    ) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  ScriptApp.newTrigger("procurementOnOpen")
+    .forSpreadsheet(ss)
+    .onOpen()
+    .create();
+
+  ScriptApp.newTrigger("procurementOnEdit")
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  SpreadsheetApp.getUi().alert(
+    "Procurement Status triggers installed.",
+    "The modal will now run when the spreadsheet opens and after edits.",
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
+}
+
+
+/**
+ * ============================================================
+ * INSTALLABLE OPEN HANDLER
+ * ============================================================
+ */
+function procurementOnOpen(e) {
+  onOpen(e);
+}
+
+
+/**
+ * ============================================================
+ * INSTALLABLE EDIT HANDLER
+ * ============================================================
+ */
+function procurementOnEdit(e) {
+  onEdit(e);
 }
 
 
@@ -340,6 +455,14 @@ function getActiveMissingData(sheet) {
  * Displays a modal dialog. Used by onOpen and the custom menu.
  */
 function checkActiveRequiredFields() {
+  showActiveMissingDataModal();
+}
+
+/**
+ * Finds Active rows with missing required fields and displays
+ * the centered modal when necessary.
+ */
+function showActiveMissingDataModal() {
   const sheet = SpreadsheetApp
     .getActiveSpreadsheet()
     .getSheetByName(SHEET_NAME);
@@ -348,9 +471,7 @@ function checkActiveRequiredFields() {
 
   const missingRows = getActiveMissingData(sheet);
 
-  if (missingRows.length === 0) {
-    return;
-  }
+  if (missingRows.length === 0) return;
 
   showCenteredMissingDataDialog(missingRows);
 }
