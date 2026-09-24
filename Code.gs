@@ -27,41 +27,24 @@ const SHEET_NAME = "Data List";
  */
 function onOpen(e) {
 
-  // Always update statuses when the spreadsheet opens.
   updateAllStatuses();
   SpreadsheetApp.flush();
 
-  /*
-   * SpreadsheetApp.getUi() is only available when this function
-   * is actually running from the spreadsheet UI.
-   *
-   * If onOpen() is run manually from the Apps Script editor,
-   * there is no spreadsheet UI context and getUi() throws:
-   * "Cannot call SpreadsheetApp.getUi() from this context."
-   *
-   * The e object is supplied when onOpen is fired by the
-   * spreadsheet. Therefore, only create the menu and show the
-   * modal when e exists.
-   */
-  if (!e) {
-    return;
-  }
+  // Manual execution from the Apps Script editor has no UI context.
+  if (!e) return;
 
   try {
     const ui = SpreadsheetApp.getUi();
 
     ui.createMenu("Procurement Status")
       .addItem("Validate Active Rows", "checkActiveRequiredFields")
+      .addItem("Test Active Missing-Data Popup", "testActiveRequiredFieldsDialog")
       .addItem("Update All Statuses", "updateAllStatuses")
       .addToUi();
 
     checkActiveRequiredFields();
 
   } catch (error) {
-    /*
-     * Do not stop the status automation if the UI is unavailable.
-     * The spreadsheet will still be updated normally.
-     */
     console.log("Spreadsheet UI is unavailable: " + error.message);
   }
 }
@@ -361,32 +344,91 @@ function checkActiveRequiredFields() {
   showCenteredMissingDataDialog(missingRows);
 }
 
+
 /**
  * ============================================================
  * CENTERED ACTIVE MISSING-DATA MODAL
  * ============================================================
  *
- * Uses an HTML modal instead of SpreadsheetApp.getUi().alert().
- * The HTML content is displayed inside a fixed-size Google Sheets
- * modal and uses CSS flexbox so the content is visually centered.
+ * The dialog HTML is generated directly in Code.gs.
+ * No separate HTML file is required.
  */
 function showCenteredMissingDataDialog(missingRows) {
-  const template = HtmlService.createTemplateFromFile(
-    "ActiveMissingDataDialog"
-  );
 
-  template.title = "Required Data Missing";
-  template.rows = missingRows;
+  const rowsHtml = missingRows.map(function(item) {
+    const safeFields = item.fields
+      .map(function(field) {
+        return escapeHtml(field);
+      })
+      .join(", ");
 
-  const html = template
-    .evaluate()
-    .setWidth(560)
-    .setHeight(420);
+    return (
+      '<div class="row-item">' +
+        '<div class="row-number">Row ' + item.row + '</div>' +
+        '<div class="fields">' + safeFields + '</div>' +
+      '</div>'
+    );
+  }).join("");
 
-  SpreadsheetApp.getUi().showModalDialog(
-    html,
-    "Required Data Missing"
-  );
+  const html = HtmlService.createHtmlOutput(
+    '<!DOCTYPE html>' +
+    '<html><head><base target="_top">' +
+    '<style>' +
+      '*{box-sizing:border-box}' +
+      'html,body{margin:0;padding:0;width:100%;height:100%;font-family:Arial,sans-serif;background:#fff;color:#202124}' +
+      'body{display:flex;align-items:center;justify-content:center;padding:24px}' +
+      '.dialog{width:100%;max-width:510px;margin:auto}' +
+      '.header{text-align:center;margin-bottom:18px}' +
+      '.icon{width:48px;height:48px;margin:0 auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff3cd;color:#8a6d1d;font-size:25px;font-weight:bold}' +
+      'h2{margin:0;font-size:20px;font-weight:600}' +
+      '.intro{margin:8px 0 0;text-align:center;color:#5f6368;font-size:13px;line-height:1.45}' +
+      '.list{max-height:235px;overflow-y:auto;border:1px solid #dadce0;border-radius:8px;background:#f8f9fa;padding:8px}' +
+      '.row-item{background:#fff;border:1px solid #e0e3e7;border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:13px;line-height:1.4}' +
+      '.row-item:last-child{margin-bottom:0}' +
+      '.row-number{font-weight:600}' +
+      '.fields{color:#5f6368;margin-top:3px}' +
+      '.footer{text-align:center;margin-top:16px}' +
+      '.note{margin:0 0 13px;color:#5f6368;font-size:12px}' +
+      'button{min-width:100px;border:0;border-radius:6px;padding:9px 22px;background:#1a73e8;color:#fff;font-size:13px;font-weight:600;cursor:pointer}' +
+      'button:hover{background:#1765cc}' +
+    '</style></head>' +
+    '<body><div class="dialog">' +
+      '<div class="header">' +
+        '<div class="icon">!</div>' +
+        '<h2>Required Data Missing</h2>' +
+        '<p class="intro">The following ACTIVE row(s) have missing required data:</p>' +
+      '</div>' +
+      '<div class="list">' + rowsHtml + '</div>' +
+      '<div class="footer">' +
+        '<p class="note">Please enter the required data for the Active Status row(s).</p>' +
+        '<button onclick="google.script.host.close()">OK</button>' +
+      '</div>' +
+    '</div></body></html>'
+  ).setWidth(560).setHeight(420);
+
+  SpreadsheetApp.getUi().showModalDialog(html, "Required Data Missing");
+}
+
+
+/**
+ * Escapes spreadsheet values before placing them in HTML.
+ */
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+
+/**
+ * Manual test function.
+ * Use the Procurement Status menu inside Google Sheets.
+ */
+function testActiveRequiredFieldsDialog() {
+  checkActiveRequiredFields();
 }
 
 /**
