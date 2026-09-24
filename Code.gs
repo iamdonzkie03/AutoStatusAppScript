@@ -70,6 +70,8 @@ function onEdit(e) {
     const row = firstRow + i;
 
     if (row > 1) {
+      normalizeInputDates(sheet, row, headerMap);
+
       updateStatusForRow(
         sheet,
         row,
@@ -118,6 +120,7 @@ function updateAllStatuses() {
 
   for (let row = 2; row <= lastRow; row++) {
 
+    normalizeInputDates(sheet, row, headerMap);
     updateStatusForRow(sheet, row, headerMap);
   }
 }
@@ -374,6 +377,100 @@ function normalizeHeader(value) {
     .toUpperCase()
     .replace(/[.\-_/]+/g, " ")
     .replace(/\s+/g, " ");
+}
+
+
+/**
+ * ============================================================
+ * NORMALIZE INPUT DATES
+ * ============================================================
+ *
+ * The following columns accept dates entered as:
+ *
+ * MMMM d, yyyy
+ * Example: September 24, 2026
+ *
+ * If the value is entered as text, it is converted to a real
+ * Google Sheets Date value and displayed using the same format.
+ */
+function normalizeInputDates(sheet, row, map) {
+
+  const dateColumns = [
+    map.PRE_PROCUREMENT,
+    map.PRE_BID_CONFERENCE,
+    map.POSTING_DATE,
+    map.ELIGIBILITY_SCREENING,
+    map.SUBMISSION_OF_BIDS
+  ];
+
+  dateColumns.forEach(function(column) {
+
+    if (!column) return;
+
+    const cell = sheet.getRange(row, column);
+    const value = cell.getValue();
+
+    if (!hasValue(value)) return;
+
+    /* Already a real date value. */
+    if (Object.prototype.toString.call(value) === "[object Date]") {
+      if (!isNaN(value.getTime())) {
+        cell.setNumberFormat("mmmm d, yyyy");
+      }
+      return;
+    }
+
+    /* Convert text entered as MMMM d, yyyy into a real Date. */
+    if (typeof value === "string") {
+      const parsed = parseInputDate(value);
+
+      if (parsed) {
+        cell.setValue(parsed);
+        cell.setNumberFormat("mmmm d, yyyy");
+      }
+    }
+  });
+}
+
+/**
+ * Parses the requested input format:
+ * MMMM d, yyyy
+ *
+ * Example: September 24, 2026
+ */
+function parseInputDate(value) {
+
+  const text = String(value).trim();
+
+  if (!text) return null;
+
+  const match = text.match(
+    /^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+(\\d{1,2}),\\s+(\\d{4})$/i
+  );
+
+  if (!match) return null;
+
+  const monthNames = [
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december"
+  ];
+
+  const month = monthNames.indexOf(match[1].toLowerCase());
+  const day = Number(match[2]);
+  const year = Number(match[3]);
+
+  const date = new Date(year, month, day);
+
+  /* Reject impossible dates such as February 30. */
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return startOfDay(date);
 }
 
 
