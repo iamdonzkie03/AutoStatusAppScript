@@ -31,14 +31,18 @@ function onOpen(e) {
   if (!e) return;
 
   try {
-    updateAllStatuses();
+    const invalidDateFields = updateAllStatuses();
     SpreadsheetApp.flush();
+
     const sheet = SpreadsheetApp
       .getActiveSpreadsheet()
       .getSheetByName(SHEET_NAME);
 
     if (sheet) {
-      showValidationDialog([], getActiveMissingData(sheet));
+      showValidationDialog(
+        invalidDateFields,
+        getActiveMissingData(sheet)
+      );
     }
   } catch (error) {
     console.log("onOpen validation skipped: " + error.message);
@@ -93,8 +97,20 @@ function onEdit(e) {
 
   SpreadsheetApp.flush();
 
-  // Show ONE combined validation dialog for this edit.
-  showValidationDialog(invalidDateFields, getActiveMissingData(sheet));
+  /*
+   * Re-scan ALL data rows after the edit so the dialog shows
+   * every currently invalid date field, not only the fields
+   * in the row that was edited.
+   */
+  const allInvalidDateFields = collectInvalidDateFields(
+    sheet,
+    headerMap
+  );
+
+  showValidationDialog(
+    allInvalidDateFields,
+    getActiveMissingData(sheet)
+  );
 }
 
 
@@ -127,7 +143,7 @@ function showValidationDialog(invalidDateFields, missingRows) {
     sectionsHtml +=
       '<div class="section">' +
         '<h3>Invalid Date Format</h3>' +
-        '<p class="section-note">Use <b>MMMM d, yyyy</b>, for example: September 24, 2026.</p>' +
+        '<p class="section-note">All currently invalid date fields are listed below. Use <b>MMMM d, yyyy</b>, for example: September 24, 2026. You may also enter <b>N/A</b>, <b>NA</b>, or <b>Not Applicable</b>.</p>' +
         '<div class="list">' + dateHtml + '</div>' +
       '</div>';
   }
@@ -222,13 +238,62 @@ function updateAllStatuses() {
 
   const lastRow = sheet.getLastRow();
 
-  if (lastRow < 2) return;
+  if (lastRow < 2) return [];
+
+  const invalidDateFields = [];
 
   for (let row = 2; row <= lastRow; row++) {
 
-    normalizeInputDates(sheet, row, headerMap);
+    const invalidFields = normalizeInputDates(
+      sheet,
+      row,
+      headerMap
+    );
+
+    invalidFields.forEach(function(field) {
+      invalidDateFields.push(
+        "Row " + row + ": " + field
+      );
+    });
+
     updateStatusForRow(sheet, row, headerMap);
   }
+
+  return invalidDateFields;
+}
+
+
+/**
+ * ============================================================
+ * COLLECT ALL INVALID DATE FIELDS
+ * ============================================================
+ *
+ * Scans every data row and every supported date column.
+ * This ensures the validation dialog lists all invalid date
+ * fields currently present in the sheet.
+ */
+function collectInvalidDateFields(sheet, map) {
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow < 2) return [];
+
+  const invalidDateFields = [];
+
+  for (let row = 2; row <= lastRow; row++) {
+    const invalidFields = normalizeInputDates(
+      sheet,
+      row,
+      map
+    );
+
+    invalidFields.forEach(function(field) {
+      invalidDateFields.push(
+        "Row " + row + ": " + field
+      );
+    });
+  }
+
+  return invalidDateFields;
 }
 
 
