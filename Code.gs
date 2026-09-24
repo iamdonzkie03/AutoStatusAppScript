@@ -26,18 +26,44 @@ const SHEET_NAME = "Data List";
  * Updates all statuses whenever the spreadsheet is opened.
  */
 function onOpen(e) {
-  const ui = SpreadsheetApp.getUi();
 
-  ui.createMenu("Procurement Status")
-    .addItem("Validate Active Rows", "checkActiveRequiredFields")
-    .addItem("Update All Statuses", "updateAllStatuses")
-    .addToUi();
-
+  // Always update statuses when the spreadsheet opens.
   updateAllStatuses();
   SpreadsheetApp.flush();
 
-  // Modal dialogs are supported from onOpen.
-  checkActiveRequiredFields();
+  /*
+   * SpreadsheetApp.getUi() is only available when this function
+   * is actually running from the spreadsheet UI.
+   *
+   * If onOpen() is run manually from the Apps Script editor,
+   * there is no spreadsheet UI context and getUi() throws:
+   * "Cannot call SpreadsheetApp.getUi() from this context."
+   *
+   * The e object is supplied when onOpen is fired by the
+   * spreadsheet. Therefore, only create the menu and show the
+   * modal when e exists.
+   */
+  if (!e) {
+    return;
+  }
+
+  try {
+    const ui = SpreadsheetApp.getUi();
+
+    ui.createMenu("Procurement Status")
+      .addItem("Validate Active Rows", "checkActiveRequiredFields")
+      .addItem("Update All Statuses", "updateAllStatuses")
+      .addToUi();
+
+    checkActiveRequiredFields();
+
+  } catch (error) {
+    /*
+     * Do not stop the status automation if the UI is unavailable.
+     * The spreadsheet will still be updated normally.
+     */
+    console.log("Spreadsheet UI is unavailable: " + error.message);
+  }
 }
 
 
