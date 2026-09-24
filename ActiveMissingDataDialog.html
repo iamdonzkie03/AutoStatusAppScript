@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      min-height: 100%;
+      font-family: Arial, sans-serif;
+      background: #ffffff;
+      color: #202124;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .dialog {
+      width: 100%;
+      max-width: 510px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 18px;
+    }
+
+    .icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 10px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff3cd;
+      color: #8a6d1d;
+      font-size: 25px;
+      font-weight: bold;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .intro {
+      margin: 8px 0 0;
+      text-align: center;
+      color: #5f6368;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .list {
+      max-height: 245px;
+      overflow-y: auto;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      background: #f8f9fa;
+      padding: 8px;
+    }
+
+    .row {
+      background: #ffffff;
+      border: 1px solid #e0e3e7;
+      border-radius: 6px;
+      padding: 9px 11px;
+      margin-bottom: 7px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .row:last-child {
+      margin-bottom: 0;
+    }
+
+    .row-number {
+      font-weight: 600;
+      color: #202124;
+    }
+
+    .fields {
+      color: #5f6368;
+      margin-top: 3px;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 16px;
+    }
+
+    .note {
+      margin: 0 0 13px;
+      color: #5f6368;
+      font-size: 12px;
+    }
+
+    button {
+      min-width: 100px;
+      border: 0;
+      border-radius: 6px;
+      padding: 9px 22px;
+      background: #1a73e8;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #1765cc;
+    }
+
+    button:focus {
+      outline: 2px solid #aecbfa;
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="dialog">
+    <div class="header">
+      <div class="icon">!</div>
+      <h2><?= title ?></h2>
+      <p class="intro">
+        The following ACTIVE row(s) have missing required data:
+      </p>
+    </div>
+
+    <div class="list">
+      <? rows.forEach(function(item) { ?>
+        <div class="row">
+          <div class="row-number">Row <?= item.row ?></div>
+          <div class="fields">
+            <?= item.fields.join(", ") ?>
+          </div>
+        </div>
+      <? }); ?>
+    </div>
+
+    <div class="footer">
+      <p class="note">
+        Please enter the required data for the Active Status row(s).
+      </p>
+      <button onclick="google.script.host.close()">OK</button>
+    </div>
+  </div>
+</body>
+</html>
