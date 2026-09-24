@@ -33,7 +33,13 @@ function onOpen(e) {
   try {
     updateAllStatuses();
     SpreadsheetApp.flush();
-    showActiveMissingDataModal();
+    const sheet = SpreadsheetApp
+      .getActiveSpreadsheet()
+      .getSheetByName(SHEET_NAME);
+
+    if (sheet) {
+      showValidationDialog([], getActiveMissingData(sheet));
+    }
   } catch (error) {
     console.log("onOpen validation skipped: " + error.message);
   }
@@ -87,54 +93,107 @@ function onEdit(e) {
 
   SpreadsheetApp.flush();
 
-  // Invalid date input is also shown in the same dialog system.
-  if (invalidDateFields.length > 0) {
-    showInvalidDateDialog(invalidDateFields);
-  }
-
-  // Validate Active rows after the status has been recalculated.
-  showActiveMissingDataModal();
+  // Show ONE combined validation dialog for this edit.
+  showValidationDialog(invalidDateFields, getActiveMissingData(sheet));
 }
 
 
 /**
- * Displays a dialog when one or more dates do not use:
- * MMMM d, yyyy
+ * ============================================================
+ * COMBINED VALIDATION DIALOG
+ * ============================================================
+ *
+ * Displays one dialog for both:
+ * 1. Invalid date formats
+ * 2. Missing required data in ACTIVE rows
+ *
+ * If both problems exist, they are displayed together.
  */
-function showInvalidDateDialog(invalidDateFields) {
-  const rowsHtml = invalidDateFields.map(function(item) {
-    return '<div class="row-item">' + escapeHtml(item) + '</div>';
-  }).join("");
+function showValidationDialog(invalidDateFields, missingRows) {
+  const hasInvalidDates = invalidDateFields && invalidDateFields.length > 0;
+  const hasMissingData = missingRows && missingRows.length > 0;
+
+  if (!hasInvalidDates && !hasMissingData) return;
+
+  let sectionsHtml = "";
+
+  if (hasInvalidDates) {
+    const dateHtml = invalidDateFields.map(function(item) {
+      return '<div class="item error-item">' +
+        escapeHtml(item) +
+      '</div>';
+    }).join("");
+
+    sectionsHtml +=
+      '<div class="section">' +
+        '<h3>Invalid Date Format</h3>' +
+        '<p class="section-note">Use <b>MMMM d, yyyy</b>, for example: September 24, 2026.</p>' +
+        '<div class="list">' + dateHtml + '</div>' +
+      '</div>';
+  }
+
+  if (hasMissingData) {
+    const missingHtml = missingRows.map(function(item) {
+      const fields = item.fields.map(function(field) {
+        return escapeHtml(field);
+      }).join(", ");
+
+      return '<div class="item">' +
+        '<div class="row-number">Row ' + item.row + '</div>' +
+        '<div class="fields">' + fields + '</div>' +
+      '</div>';
+    }).join("");
+
+    sectionsHtml +=
+      '<div class="section">' +
+        '<h3>Required Data Missing</h3>' +
+        '<p class="section-note">The following ACTIVE row(s) are missing required data:</p>' +
+        '<div class="list">' + missingHtml + '</div>' +
+      '</div>';
+  }
 
   const html = HtmlService.createHtmlOutput(
     '<!DOCTYPE html>' +
     '<html><head><base target="_top">' +
     '<style>' +
       '*{box-sizing:border-box}' +
-      'html,body{margin:0;padding:0;width:100%;height:100%;font-family:Arial,sans-serif;color:#202124}' +
+      'html,body{margin:0;padding:0;width:100%;height:100%;font-family:Arial,sans-serif;background:#fff;color:#202124}' +
       'body{display:flex;align-items:center;justify-content:center;padding:24px}' +
-      '.dialog{width:100%;max-width:510px;text-align:center}' +
-      '.icon{width:48px;height:48px;margin:0 auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fdecea;color:#b3261e;font-size:25px;font-weight:bold}' +
+      '.dialog{width:100%;max-width:520px;margin:auto}' +
+      '.header{text-align:center;margin-bottom:18px}' +
+      '.icon{width:48px;height:48px;margin:0 auto 10px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff3cd;color:#8a6d1d;font-size:25px;font-weight:bold}' +
       'h2{margin:0;font-size:20px;font-weight:600}' +
-      '.intro{margin:8px 0 16px;color:#5f6368;font-size:13px;line-height:1.45}' +
-      '.list{text-align:left;max-height:220px;overflow-y:auto;border:1px solid #dadce0;border-radius:8px;background:#f8f9fa;padding:8px}' +
-      '.row-item;background:#fff' +
-      '.row-item{background:#fff;border:1px solid #e0e3e7;border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:13px;line-height:1.4}' +
-      '.row-item:last-child{margin-bottom:0}' +
-      '.note{margin:16px 0 13px;color:#5f6368;font-size:12px}' +
+      '.intro{margin:8px 0 18px;text-align:center;color:#5f6368;font-size:13px;line-height:1.45}' +
+      '.section{margin-bottom:16px}' +
+      '.section:last-child{margin-bottom:0}' +
+      'h3{margin:0 0 6px;font-size:14px;font-weight:600}' +
+      '.section-note{margin:0 0 8px;color:#5f6368;font-size:12px;line-height:1.4}' +
+      '.list{max-height:150px;overflow-y:auto;border:1px solid #dadce0;border-radius:8px;background:#f8f9fa;padding:8px}' +
+      '.item{background:#fff;border:1px solid #e0e3e7;border-radius:6px;padding:9px 11px;margin-bottom:7px;font-size:13px;line-height:1.4}' +
+      '.item:last-child{margin-bottom:0}' +
+      '.error-item{color:#b3261e}' +
+      '.row-number{font-weight:600}' +
+      '.fields{color:#5f6368;margin-top:3px}' +
+      '.footer{text-align:center;margin-top:18px}' +
+      '.note{margin:0 0 13px;color:#5f6368;font-size:12px}' +
       'button{min-width:100px;border:0;border-radius:6px;padding:9px 22px;background:#1a73e8;color:#fff;font-size:13px;font-weight:600;cursor:pointer}' +
+      'button:hover{background:#1765cc}' +
     '</style></head>' +
     '<body><div class="dialog">' +
-      '<div class="icon">!</div>' +
-      '<h2>Invalid Date Format</h2>' +
-      '<p class="intro">Please enter dates using <b>MMMM d, yyyy</b>.<br>Example: September 24, 2026</p>' +
-      '<div class="list">' + rowsHtml + '</div>' +
-      '<p class="note">Please correct the date before continuing.</p>' +
-      '<button onclick="google.script.host.close()">OK</button>' +
+      '<div class="header">' +
+        '<div class="icon">!</div>' +
+        '<h2>Procurement Data Validation</h2>' +
+        '<p class="intro">Please review the following item(s) before continuing.</p>' +
+      '</div>' +
+      sectionsHtml +
+      '<div class="footer">' +
+        '<p class="note">Correct the items above and continue entering the procurement data.</p>' +
+        '<button onclick="google.script.host.close()">OK</button>' +
+      '</div>' +
     '</div></body></html>'
-  ).setWidth(560).setHeight(390);
+  ).setWidth(580).setHeight(hasInvalidDates && hasMissingData ? 560 : 440);
 
-  SpreadsheetApp.getUi().showModalDialog(html, "Invalid Date Format");
+  SpreadsheetApp.getUi().showModalDialog(html, "Procurement Data Validation");
 }
 
 /**
@@ -455,56 +514,6 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-
-/**
- * Manual test function.
- * Use the Procurement Status menu inside Google Sheets.
- */
-function testActiveRequiredFieldsDialog() {
-  checkActiveRequiredFields();
-}
-
-/**
- * Displays an edit-time toast.
- *
- * This is intentionally separate from checkActiveRequiredFields()
- * because simple onEdit triggers cannot reliably show modal dialogs.
- */
-function showActiveMissingDataToast(sheet) {
-  const missingRows = getActiveMissingData(sheet);
-
-  if (missingRows.length === 0) {
-    return;
-  }
-
-  SpreadsheetApp.getActiveSpreadsheet().toast(
-    buildMissingDataMessage(missingRows),
-    "Active Status - Required Data Missing",
-    8
-  );
-}
-
-/**
- * Builds the message shared by the modal and toast.
- */
-function buildMissingDataMessage(missingRows) {
-  let message =
-    "The following ACTIVE row(s) have missing required data:\n\n";
-
-  missingRows.forEach(function(item) {
-    message +=
-      "Row " +
-      item.row +
-      ": " +
-      item.fields.join(", ") +
-      "\n";
-  });
-
-  message +=
-    "\nPlease enter the required data for the Active Status row(s).";
-
-  return message;
-}
 
 /**
  * ============================================================
