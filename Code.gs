@@ -37,21 +37,15 @@ const SHEET_NAME = "Data List";
 function setupTriggers() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Remove existing triggers for these handlers first so we
-  // do not create duplicate popups.
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
     const handler = trigger.getHandlerFunction();
-
     if (handler === "onOpen" || handler === "onEdit") {
       ScriptApp.deleteTrigger(trigger);
     }
   });
 
-  ScriptApp.newTrigger("onOpen")
-    .forSpreadsheet(ss)
-    .onOpen()
-    .create();
-
+  // onOpen stays as the simple trigger so it can interact with
+  // the user's open spreadsheet UI.
   ScriptApp.newTrigger("onEdit")
     .forSpreadsheet(ss)
     .onEdit()
@@ -59,11 +53,10 @@ function setupTriggers() {
 
   SpreadsheetApp.getUi().alert(
     "Setup Complete",
-    "Installable triggers for ON OPEN and ON EDIT have been created.\n\nClose and reopen the spreadsheet to test the popup.",
+    "The edit trigger has been installed. Close and reopen the spreadsheet to test validation.",
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
-
 
 
 /**
@@ -71,9 +64,9 @@ function setupTriggers() {
  * ON OPEN
  * ============================================================
  *
- * Updates all statuses whenever the spreadsheet is opened.
+ * Updates statuses and displays the validation modal when the
+ * spreadsheet is opened.
  */
-function onOpen(e) {
   // Runs automatically when the spreadsheet is opened.
   // No custom menu is created.
   if (!e) return;
@@ -93,7 +86,11 @@ function onOpen(e) {
       );
     }
   } catch (error) {
-    console.log("onOpen validation skipped: " + error.message);
+    SpreadsheetApp.getUi().alert(
+      "Validation Error",
+      error.message,
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
   }
 }
 
@@ -144,21 +141,42 @@ function onEdit(e) {
   }
 
   SpreadsheetApp.flush();
+}
 
-  /*
-   * Re-scan ALL data rows after the edit so the dialog shows
-   * every currently invalid date field, not only the fields
-   * in the row that was edited.
-   */
-  const allInvalidDateFields = collectInvalidDateFields(
-    sheet,
-    headerMap
-  );
 
-  showValidationDialog(
-    allInvalidDateFields,
-    getActiveMissingData(sheet)
-  );
+/**
+ * ============================================================
+ * MANUAL VALIDATION MODAL TEST
+ * ============================================================
+ */
+function openValidationModal() {
+  const sheet = SpreadsheetApp
+    .getActiveSpreadsheet()
+    .getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert(
+      "Validation Error",
+      'Sheet "' + SHEET_NAME + '" was not found.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  const headerMap = getHeaderMap(sheet);
+  const invalidDateFields = collectInvalidDateFields(sheet, headerMap);
+  const missingRows = getActiveMissingData(sheet);
+
+  if (invalidDateFields.length === 0 && missingRows.length === 0) {
+    SpreadsheetApp.getUi().alert(
+      "Validation Complete",
+      "No invalid date formats or missing ACTIVE-row data were found.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  showValidationDialog(invalidDateFields, missingRows);
 }
 
 
