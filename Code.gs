@@ -39,13 +39,14 @@ function setupTriggers() {
 
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
     const handler = trigger.getHandlerFunction();
+
     if (handler === "onOpen" || handler === "onEdit") {
       ScriptApp.deleteTrigger(trigger);
     }
   });
 
-  // onOpen stays as the simple trigger so it can interact with
-  // the user's open spreadsheet UI.
+  // Installable onEdit trigger is used for reliable automatic
+  // processing whenever the user enters or edits data.
   ScriptApp.newTrigger("onEdit")
     .forSpreadsheet(ss)
     .onEdit()
@@ -53,7 +54,7 @@ function setupTriggers() {
 
   SpreadsheetApp.getUi().alert(
     "Setup Complete",
-    "The edit trigger has been installed. Close and reopen the spreadsheet to test validation.",
+    "The edit trigger has been installed. Data validation will now run automatically after edits.",
     SpreadsheetApp.getUi().ButtonSet.OK
   );
 }
@@ -64,12 +65,10 @@ function setupTriggers() {
  * ON OPEN
  * ============================================================
  *
- * Updates statuses and displays the validation modal when the
- * spreadsheet is opened.
+ * Updates statuses and displays the full validation modal when
+ * the spreadsheet is opened.
  */
 function onOpen(e) {
-  // Runs automatically when the spreadsheet is opened.
-  // No custom menu is created.
   if (!e) return;
 
   try {
@@ -101,13 +100,16 @@ function onOpen(e) {
  * ON EDIT
  * ============================================================
  *
- * This is the main edit handler.
+ * Runs automatically after data is entered or edited.
  *
  * IMPORTANT:
- * To display a modal after an edit, this function must be
- * installed as a Spreadsheet -> On edit trigger.
+ * Google Sheets does not reliably allow a modal dialog to be
+ * opened from an edit trigger. Therefore this function uses a
+ * reliable spreadsheet toast notification for immediate feedback.
  *
- * Do not create any custom menu for this feature.
+ * The full HTML validation modal remains available through:
+ * - onOpen(e), when the spreadsheet is opened
+ * - openValidationModal(), when manually run
  */
 function onEdit(e) {
   if (!e || !e.range) return;
@@ -123,7 +125,9 @@ function onEdit(e) {
 
   const firstRow = e.range.getRow();
   const numberOfRows = e.range.getNumRows();
+
   const invalidDateFields = [];
+  const editedRows = [];
 
   for (let i = 0; i < numberOfRows; i++) {
     const row = firstRow + i;
@@ -135,13 +139,144 @@ function onEdit(e) {
     );
 
     invalidFields.forEach(function(field) {
-      invalidDateFields.push("Row " + row + ": " + field);
+      invalidDateFields.push(
+        "Row " + row + ": " + field
+      );
     });
 
     updateStatusForRow(sheet, row, headerMap);
+    editedRows.push(row);
   }
 
   SpreadsheetApp.flush();
+
+  // Check only the rows that were actually edited so the
+  // notification appears immediately after data entry.
+  const missingRows = getActiveMissingDataForRows(
+    sheet,
+    headerMap,
+    editedRows
+  );
+
+  showEditValidationToast(
+    sheet,
+    invalidDateFields,
+    missingRows
+  );
+}
+
+
+/**
+ * ============================================================
+ * ACTIVE-ROW VALIDATION FOR EDITED ROWS
+ * ============================================================
+ */
+function getActiveMissingDataForRows(sheet, map, rows) {
+  if (
+    !map.STATUS ||
+    !map.PRE_PROCUREMENT ||
+    !map.PRE_BID_CONFERENCE ||
+    !map.PROJECT_ID
+  ) {
+    return [];
+  }
+
+  const missingRows = [];
+
+  rows.forEach(function(rowNumber) {
+    if (rowNumber < 2) return;
+
+    const lastColumn = sheet.getLastColumn();
+
+    const row = sheet
+      .getRange(rowNumber, 1, 1, lastColumn)
+      .getValues()[0];
+
+    const status = String(
+      row[map.STATUS - 1] === null ||
+      row[map.STATUS - 1] === undefined
+        ? ""
+        : row[map.STATUS - 1]
+    ).trim().toUpperCase();
+
+    if (status !== "ACTIVE") return;
+
+    const missingFields = [];
+
+    if (!hasValue(row[map.PRE_PROCUREMENT - 1])) {
+      missingFields.push("PRE-PROCUREMENT CONFERENCE");
+    }
+
+    if (!hasValue(row[map.PRE_BID_CONFERENCE - 1])) {
+      missingFields.push("PRE-BID CONFERENCE");
+    }
+
+    if (!hasValue(row[map.PROJECT_ID - 1])) {
+      missingFields.push("PROJECT ID");
+    }
+
+    if (missingFields.length > 0) {
+      missingRows.push({
+        row: rowNumber,
+        fields: missingFields
+      });
+    }
+  });
+
+  return missingRows;
+}
+
+
+/**
+ * ============================================================
+ * IMMEDIATE EDIT VALIDATION TOAST
+ * ============================================================
+ *
+ * Toast notifications are reliable from edit triggers and give
+ * immediate feedback without attempting to open a modal from
+ * the background trigger.
+ */
+function showEditValidationToast(
+  sheet,
+  invalidDateFields,
+  missingRows
+) {
+  const hasInvalidDates =
+    invalidDateFields && invalidDateFields.length > 0;
+
+  const hasMissingData =
+    missingRows && missingRows.length > 0;
+
+  if (!hasInvalidDates && !hasMissingData) {
+    return;
+  }
+
+  const messages = [];
+
+  if (hasInvalidDates) {
+    messages.push(
+      "Invalid date format: " +
+      invalidDateFields.join("; ")
+    );
+  }
+
+  if (hasMissingData) {
+    missingRows.forEach(function(item) {
+      messages.push(
+        "Row " + item.row +
+        " missing: " +
+        item.fields.join(", ")
+      );
+    });
+  }
+
+  const message = messages.join("\\n");
+
+  SpreadsheetApp.getActiveSpreadsheet().toast(
+    message,
+    "Procurement Data Validation",
+    8
+  );
 }
 
 
