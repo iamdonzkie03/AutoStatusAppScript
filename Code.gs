@@ -67,6 +67,7 @@ function setupTriggers() {
  * Updates statuses and displays the validation modal when the
  * spreadsheet is opened.
  */
+function onOpen(e) {
   // Runs automatically when the spreadsheet is opened.
   // No custom menu is created.
   if (!e) return;
