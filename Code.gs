@@ -82,6 +82,54 @@ function setupAutomaticTriggers() {
 }
 
 
+function refreshAllStatuses_() {
+
+  const sheet =
+    SpreadsheetApp.getActiveSpreadsheet()
+      .getActiveSheet();
+
+  if (!sheet) return;
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow <= CFG.HEADER_ROW) {
+    saveValidationResult_(sheet, []);
+    return;
+  }
+
+  let allErrors = [];
+
+  for (
+    let row = CFG.HEADER_ROW + 1;
+    row <= lastRow;
+    row++
+  ) {
+
+    const result =
+      processRow_(sheet, row);
+
+    allErrors =
+      allErrors.concat(
+        result.errors
+      );
+  }
+
+  allErrors =
+    removeDuplicateErrors_(allErrors);
+
+  /*
+   * Save the current validation state so the modal
+   * can display errors immediately on opening.
+   */
+  saveValidationResult_(
+    sheet,
+    allErrors
+  );
+
+  SpreadsheetApp.flush();
+}
+
+
 /*
  * Installable OPEN trigger.
  */
