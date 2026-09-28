@@ -954,17 +954,19 @@ function normalizeHeader_(value) {
 
 function isProcurementInputEmpty_(data) {
 
-  const statusColumn = data.columns[CFG.STATUS_HEADER];
+  /*
+   * IMPORTANT:
+   * Do not use every non-STATUS cell to decide whether a row
+   * contains procurement data. Sheets may contain formulas,
+   * helper values, formatting artifacts, or other automatic
+   * values in otherwise unused rows.
+   *
+   * A procurement record officially starts when POSTING DATE
+   * contains data. Until then, STATUS must remain blank.
+   */
+  const postingDate = getValue_(data, 'POSTING DATE');
 
-  return data.displayValues.every(function(value, index) {
-
-    // Ignore STATUS regardless of where the column is located.
-    if (statusColumn !== undefined && index === statusColumn) {
-      return true;
-    }
-
-    return String(value || '').trim() === '';
-  });
+  return String(postingDate || '').trim() === '';
 }
 
 
