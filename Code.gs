@@ -258,14 +258,32 @@ function processRow_(sheet, row) {
   const errors = [];
   const status = determineStatus_(data, errors);
 
-  // A blank status is always written back as blank; never default to Active.
+  // A blank status is always written back as blank.
   setStatus_(sheet, row, status);
 
   /*
-   * Validate according to the status that was just determined.
-   * Supplier is intentionally NOT required for Failed.
+   * Validate the values that were actually entered BEFORE
+   * applying status-specific required-field rules.
+   *
+   * This is important when a row is incomplete and therefore
+   * has no status yet. Invalid dates/numbers must still be
+   * reported in the modal.
    */
-  validateForStatus_(data, status, errors);
+  validateEnteredFields_(data, errors);
+
+  /*
+   * If a procurement row has started but does not yet qualify
+   * for a status, use Active's required-field rules only for
+   * validation. This does NOT write Active into STATUS.
+   */
+  const validationStatus =
+    status || 'Active';
+
+  validateForStatus_(
+    data,
+    validationStatus,
+    errors
+  );
 
   return {
     status: status,
@@ -392,6 +410,90 @@ function determineStatus_(data, errors) {
   }
 
   return 'Active';
+}
+
+
+/* =========================
+ * ENTERED-VALUE VALIDATION
+ * ========================= */
+
+/*
+ * Validate every date/number that the user has actually entered,
+ * independently of STATUS.
+ *
+ * This guarantees that an invalid date or number is reported even
+ * when the row is incomplete and STATUS is still blank.
+ */
+function validateEnteredFields_(data, errors) {
+
+  const dateFields = [
+    'POSTING DATE',
+    'PRE-PROCUREMENT CONFERENCE',
+    'PRE-BID CONFERENCE',
+    'ELIGIBILITY SCREENING',
+    'SUBMISSION OF BIDS',
+    'POST-QUALIFICATION',
+    'DETAILED BID EVALUATION',
+    'NOA DATE',
+    'NTP DATE',
+    'PO DATE'
+  ];
+
+  dateFields.forEach(function(field) {
+
+    const key = normalizeHeader_(field);
+
+    if (data.columns[key] === undefined) return;
+
+    const index = data.columns[key];
+
+    const raw = data.values[index];
+
+    const display =
+      String(data.displayValues[index] || '').trim();
+
+    if (!display) return;
+
+    if (!isValidDate_(raw, display)) {
+      addError_(
+        errors,
+        data.row,
+        field,
+        'Please use correct date format.'
+      );
+    }
+  });
+
+  /*
+   * Numeric fields are checked whenever they contain a value.
+   */
+  [
+    'TOTAL ABC',
+    'PO TOTAL COST'
+  ].forEach(function(field) {
+
+    const key = normalizeHeader_(field);
+
+    if (data.columns[key] === undefined) return;
+
+    const index = data.columns[key];
+
+    const raw = data.values[index];
+
+    const display =
+      String(data.displayValues[index] || '').trim();
+
+    if (!display) return;
+
+    if (!isValidNumeric_(raw, display)) {
+      addError_(
+        errors,
+        data.row,
+        field,
+        'Please enter a numeric value with decimals.'
+      );
+    }
+  });
 }
 
 
