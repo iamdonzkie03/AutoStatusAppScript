@@ -1491,7 +1491,7 @@ function openValidationMonitor_() {
 
   SpreadsheetApp
     .getUi()
-    .showModalDialog(
+    .showModelessDialog(
       html,
       'Procurement Data Validation'
     );
@@ -1657,7 +1657,7 @@ button {
       </div>
 
       <div class="subtitle">
-        Automatic validation monitor — keep editing the sheet
+        Automatic validation monitor — keep editing the sheet — keep editing the sheet
       </div>
     </div>
 
@@ -1685,12 +1685,18 @@ button {
 <script>
 
 let lastTimestamp = 0;
+let validationBusy = false;
 
 function checkValidation() {
+
+  if (validationBusy) return;
+  validationBusy = true;
 
   google.script.run
 
     .withSuccessHandler(function(result) {
+
+      validationBusy = false;
 
       if (!result) {
         showNoErrors();
@@ -1705,6 +1711,8 @@ function checkValidation() {
     })
 
     .withFailureHandler(function(error) {
+
+      validationBusy = false;
 
       const status =
         document.getElementById('status');
