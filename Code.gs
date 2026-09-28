@@ -304,6 +304,31 @@ function determineStatus_(data, errors) {
     return '';
   }
 
+  /*
+   * Do not assign Active/Closed/Awarded/Failed/Purchase Order
+   * until POSTING DATE has been entered and is valid.
+   * Validation still runs separately, so an invalid Posting Date
+   * is reported instead of silently producing a status.
+   */
+  const postingKey = normalizeHeader_('POSTING DATE');
+
+  if (data.columns[postingKey] === undefined) {
+    return '';
+  }
+
+  const postingIndex = data.columns[postingKey];
+  const postingRaw = data.values[postingIndex];
+  const postingDisplay = String(
+    data.displayValues[postingIndex] || ''
+  ).trim();
+
+  if (
+    !postingDisplay ||
+    !isValidDate_(postingRaw, postingDisplay)
+  ) {
+    return '';
+  }
+
   const awardFields = [
     'PRE-PROCUREMENT CONFERENCE',
     'PRE-BID CONFERENCE',
@@ -1212,21 +1237,43 @@ function normalizeHeader_(value) {
 }
 
 
+const PROCUREMENT_INPUT_FIELDS = [
+  'POSTING DATE',
+  'PRE-PROCUREMENT CONFERENCE',
+  'PROJECT ID',
+  'PRE-BID CONFERENCE',
+  'ELIGIBILITY SCREENING',
+  'SUBMISSION OF BIDS',
+  'DETAILED BID EVALUATION',
+  'POST-QUALIFICATION',
+  'NOA DATE',
+  'NTP DATE',
+  'PO DATE',
+  'PO NO.',
+  'PO TOTAL COST',
+  'SUPPLIER',
+  'TOTAL ABC'
+];
+
 function isProcurementInputEmpty_(data) {
-
   /*
-   * IMPORTANT:
-   * Do not use every non-STATUS cell to decide whether a row
-   * contains procurement data. Sheets may contain formulas,
-   * helper values, formatting artifacts, or other automatic
-   * values in otherwise unused rows.
-   *
-   * A procurement record officially starts when POSTING DATE
-   * contains data. Until then, STATUS must remain blank.
+   * Only explicit procurement input fields count.
+   * STATUS, formulas, helper columns, and formatting artifacts
+   * do not make an otherwise blank row a procurement record.
    */
-  const postingDate = getValue_(data, 'POSTING DATE');
+  return PROCUREMENT_INPUT_FIELDS.every(function(field) {
+    const key = normalizeHeader_(field);
 
-  return String(postingDate || '').trim() === '';
+    if (data.columns[key] === undefined) {
+      return true;
+    }
+
+    const index = data.columns[key];
+
+    return String(
+      data.displayValues[index] || ''
+    ).trim() === '';
+  });
 }
 
 
@@ -1299,6 +1346,19 @@ function setStatus_(sheet, row, status) {
   if (current !== status) {
     cell.setValue(status);
   }
+}
+
+
+/* =========================
+ * ERROR OBJECTS
+ * ========================= */
+
+function addError_(errors, row, column, message) {
+  errors.push({
+    row: row,
+    column: column,
+    message: message
+  });
 }
 
 
