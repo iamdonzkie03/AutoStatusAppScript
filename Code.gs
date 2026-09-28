@@ -118,7 +118,7 @@ function refreshAllStatuses_() {
     removeDuplicateErrors_(allErrors);
 
   /*
-   * Save the current validation state so the modal
+   * Save the current validation state so the modeless monitor
    * can display errors immediately on opening.
    */
   saveValidationResult_(
@@ -1398,7 +1398,7 @@ function saveValidationResult_(
 function runValidationNow() {
   /*
    * The HTML monitor actively refreshes validation instead of relying
-   * exclusively on the onEdit trigger. This makes the modal resilient
+   * exclusively on the onEdit trigger. This makes the modeless monitor resilient
    * to delayed/missed trigger executions and catches changes immediately.
    */
   const lock = LockService.getDocumentLock();
@@ -1657,7 +1657,7 @@ button {
       </div>
 
       <div class="subtitle">
-        Automatic validation monitor
+        Automatic validation monitor — keep editing the sheet
       </div>
     </div>
 
