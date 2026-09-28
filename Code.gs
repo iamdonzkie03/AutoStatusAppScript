@@ -36,11 +36,44 @@ const CFG = {
 function onOpen(e) {
   try {
     SpreadsheetApp.flush();
+
+    /*
+     * Re-evaluate existing rows when the spreadsheet opens.
+     * This clears stale statuses such as "Active" from blank rows
+     * without requiring the user to edit those rows manually.
+     */
+    refreshAllStatuses_();
+
     Utilities.sleep(300);
     openValidationMonitor_();
+
   } catch (err) {
     console.error('onOpen:', err);
   }
+}
+
+
+function refreshAllStatuses_() {
+
+  const sheet =
+    SpreadsheetApp.getActiveSpreadsheet()
+      .getActiveSheet();
+
+  if (!sheet) return;
+
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow <= CFG.HEADER_ROW) return;
+
+  for (
+    let row = CFG.HEADER_ROW + 1;
+    row <= lastRow;
+    row++
+  ) {
+    processRow_(sheet, row);
+  }
+
+  SpreadsheetApp.flush();
 }
 
 
