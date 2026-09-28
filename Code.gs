@@ -88,7 +88,11 @@ function onEdit(e) {
 function processRow_(sheet, row) {
   const data = getRowData_(sheet, row);
 
-  if (!data || isEntireRowEmpty_(data.displayValues)) {
+  // STATUS itself must never count as user input.
+  // Otherwise an existing status (for example "Active") makes an
+  // otherwise blank row look non-empty and causes the script to assign
+  // a status again.
+  if (!data || isDataRowEmpty_(data)) {
     setStatus_(sheet, row, '');
     return { status: '', errors: [] };
   }
@@ -941,12 +945,21 @@ function normalizeHeader_(value) {
 }
 
 
-function isEntireRowEmpty_(values) {
+function isDataRowEmpty_(data) {
 
-  return values.every(function(value) {
+  // Ignore the STATUS column completely when deciding whether
+  // the row contains actual procurement data.
+  return data.headers.every(function(header, index) {
+
+    if (
+      normalizeHeader_(header) ===
+      CFG.STATUS_HEADER
+    ) {
+      return true;
+    }
 
     return String(
-      value || ''
+      data.displayValues[index] || ''
     ).trim() === '';
   });
 }
