@@ -34,21 +34,30 @@ const CFG = {
  * ========================= */
 
 function onOpen(e) {
+
+  /*
+   * Open the validation monitor FIRST.
+   *
+   * Do not put refreshAllStatuses_() in front of the dialog.
+   * If a status refresh encounters an authorization or sheet error,
+   * the dialog must still be opened.
+   */
+  try {
+    openValidationMonitor_();
+  } catch (err) {
+    console.error('onOpen/openValidationMonitor_:', err);
+  }
+
+  /*
+   * Refresh existing statuses separately.
+   * A failure here must never prevent the modal from opening.
+   */
   try {
     SpreadsheetApp.flush();
-
-    /*
-     * Re-evaluate existing rows when the spreadsheet opens.
-     * This clears stale statuses such as "Active" from blank rows
-     * without requiring the user to edit those rows manually.
-     */
     refreshAllStatuses_();
-
-    Utilities.sleep(300);
-    openValidationMonitor_();
-
+    SpreadsheetApp.flush();
   } catch (err) {
-    console.error('onOpen:', err);
+    console.error('onOpen/refreshAllStatuses_:', err);
   }
 }
 
