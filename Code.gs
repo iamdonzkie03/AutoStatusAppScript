@@ -31,70 +31,100 @@ const CFG = {
 
 /* =========================
  * AUTOMATIC EVENTS
- * ========================= */
+ * =========================
+ *
+ * IMPORTANT:
+ * The actual automation uses INSTALLABLE triggers.
+ * This is required because the validation monitor uses
+ * authorized Apps Script services and an HTML dialog.
+ *
+ * Run setupAutomaticTriggers() ONCE from the Apps Script editor.
+ * No custom Sheet menu is created.
+ */
 
-function onOpen(e) {
+function setupAutomaticTriggers() {
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   /*
-   * Open the validation monitor FIRST.
-   *
-   * Do not put refreshAllStatuses_() in front of the dialog.
-   * If a status refresh encounters an authorization or sheet error,
-   * the dialog must still be opened.
+   * Remove previous copies of our installable triggers so
+   * repeated setup does not create duplicate executions.
    */
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+
+    const handler = trigger.getHandlerFunction();
+
+    if (
+      handler === 'handleOpen_' ||
+      handler === 'handleEdit_'
+    ) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  ScriptApp
+    .newTrigger('handleOpen_')
+    .forSpreadsheet(ss)
+    .onOpen()
+    .create();
+
+  ScriptApp
+    .newTrigger('handleEdit_')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  /*
+   * Run the same logic immediately so the current sheet
+   * does not need to be closed/reopened after setup.
+   */
+  handleOpen_();
+}
+
+
+/*
+ * Installable OPEN trigger.
+ */
+function handleOpen_(e) {
+
+  try {
+    refreshAllStatuses_();
+  } catch (err) {
+    console.error('handleOpen_/refreshAllStatuses_:', err);
+  }
+
   try {
     openValidationMonitor_();
   } catch (err) {
-    console.error('onOpen/openValidationMonitor_:', err);
-  }
-
-  /*
-   * Refresh existing statuses separately.
-   * A failure here must never prevent the modal from opening.
-   */
-  try {
-    SpreadsheetApp.flush();
-    refreshAllStatuses_();
-    SpreadsheetApp.flush();
-  } catch (err) {
-    console.error('onOpen/refreshAllStatuses_:', err);
+    console.error('handleOpen_/openValidationMonitor_:', err);
   }
 }
 
 
-function refreshAllStatuses_() {
+/*
+ * Installable EDIT trigger.
+ */
+function handleEdit_(e) {
 
-  const sheet =
-    SpreadsheetApp.getActiveSpreadsheet()
-      .getActiveSheet();
-
-  if (!sheet) return;
-
-  const lastRow = sheet.getLastRow();
-
-  if (lastRow <= CFG.HEADER_ROW) return;
-
-  for (
-    let row = CFG.HEADER_ROW + 1;
-    row <= lastRow;
-    row++
-  ) {
-    processRow_(sheet, row);
-  }
-
-  SpreadsheetApp.flush();
-}
-
-
-function onEdit(e) {
   if (!e || !e.range) return;
 
   const lock = LockService.getDocumentLock();
+
   if (!lock.tryLock(1500)) return;
 
   try {
+
     const range = e.range;
     const sheet = range.getSheet();
+
+    /*
+     * Ignore the header row.
+     */
+    if (
+      range.getLastRow() <= CFG.HEADER_ROW
+    ) {
+      return;
+    }
 
     const firstRow = Math.max(
       range.getRow(),
@@ -102,24 +132,62 @@ function onEdit(e) {
     );
 
     const lastRow =
-      firstRow + range.getNumRows() - 1;
+      range.getRow() +
+      range.getNumRows() -
+      1;
 
     let allErrors = [];
 
-    for (let row = firstRow; row <= lastRow; row++) {
-      const result = processRow_(sheet, row);
-      allErrors = allErrors.concat(result.errors);
+    for (
+      let row = firstRow;
+      row <= lastRow;
+      row++
+    ) {
+
+      const result =
+        processRow_(sheet, row);
+
+      allErrors =
+        allErrors.concat(
+          result.errors
+        );
     }
 
-    allErrors = removeDuplicateErrors_(allErrors);
+    allErrors =
+      removeDuplicateErrors_(allErrors);
 
-    saveValidationResult_(sheet, allErrors);
+    saveValidationResult_(
+      sheet,
+      allErrors
+    );
 
   } catch (err) {
-    console.error('onEdit:', err);
+
+    console.error(
+      'handleEdit_:',
+      err
+    );
+
   } finally {
+
     lock.releaseLock();
   }
+}
+
+
+/*
+ * Kept as lightweight fallbacks for compatibility.
+ *
+ * The installed triggers above are the authoritative
+ * automation handlers.
+ */
+function onOpen(e) {
+  return;
+}
+
+
+function onEdit(e) {
+  return;
 }
 
 
