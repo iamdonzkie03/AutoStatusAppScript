@@ -39,7 +39,8 @@ const CFG = {
  * authorized Apps Script services and an HTML dialog.
  *
  * Run setupAutomaticTriggers() ONCE from the Apps Script editor.
- * No custom Sheet menu is created.
+ * No custom Sheet menu is created. The setup creates only the
+ * installable onEdit trigger; onOpen is the native simple trigger.
  */
 
 function setupAutomaticTriggers() {
@@ -61,12 +62,6 @@ function setupAutomaticTriggers() {
       ScriptApp.deleteTrigger(trigger);
     }
   });
-
-  ScriptApp
-    .newTrigger('handleOpen_')
-    .forSpreadsheet(ss)
-    .onOpen()
-    .create();
 
   ScriptApp
     .newTrigger('handleEdit_')
@@ -141,11 +136,6 @@ function handleOpen_(e) {
     console.error('handleOpen_/refreshAllStatuses_:', err);
   }
 
-  try {
-    openValidationMonitor_();
-  } catch (err) {
-    console.error('handleOpen_/openValidationMonitor_:', err);
-  }
 }
 
 
@@ -226,11 +216,18 @@ function handleEdit_(e) {
 /*
  * Kept as lightweight fallbacks for compatibility.
  *
- * The installed triggers above are the authoritative
- * automation handlers.
+ * The installable onEdit trigger is authoritative for data processing.
+ * The native simple onOpen trigger owns the UI because opening an
+ * HtmlService window is a spreadsheet UI operation.
  */
 function onOpen(e) {
-  return;
+  // Native simple onOpen owns the UI action. This is deliberately
+  // separate from the authorized installable trigger used for data work.
+  try {
+    openValidationMonitor_();
+  } catch (err) {
+    console.error('onOpen/openValidationMonitor_:', err);
+  }
 }
 
 
