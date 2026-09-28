@@ -92,7 +92,7 @@ function processRow_(sheet, row) {
   // Otherwise an existing status (for example "Active") makes an
   // otherwise blank row look non-empty and causes the script to assign
   // a status again.
-  if (!data || isDataRowEmpty_(data)) {
+  if (!data || isProcurementInputEmpty_(data)) {
     setStatus_(sheet, row, '');
     return { status: '', errors: [] };
   }
@@ -100,6 +100,7 @@ function processRow_(sheet, row) {
   const errors = [];
   const status = determineStatus_(data, errors);
 
+  // A blank status is always written back as blank; never default to Active.
   setStatus_(sheet, row, status);
 
   /*
@@ -120,6 +121,12 @@ function processRow_(sheet, row) {
  * ========================= */
 
 function determineStatus_(data, errors) {
+
+  // Never assign a status to a row that has no procurement input.
+  // This check is intentionally independent of the STATUS cell itself.
+  if (isProcurementInputEmpty_(data)) {
+    return '';
+  }
 
   const awardFields = [
     'PRE-PROCUREMENT CONFERENCE',
@@ -942,6 +949,22 @@ function normalizeHeader_(value) {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, ' ');
+}
+
+
+function isProcurementInputEmpty_(data) {
+
+  const statusColumn = data.columns[CFG.STATUS_HEADER];
+
+  return data.displayValues.every(function(value, index) {
+
+    // Ignore STATUS regardless of where the column is located.
+    if (statusColumn !== undefined && index === statusColumn) {
+      return true;
+    }
+
+    return String(value || '').trim() === '';
+  });
 }
 
 
