@@ -1395,6 +1395,30 @@ function saveValidationResult_(
 }
 
 
+function runValidationNow() {
+  /*
+   * The HTML monitor actively refreshes validation instead of relying
+   * exclusively on the onEdit trigger. This makes the modal resilient
+   * to delayed/missed trigger executions and catches changes immediately.
+   */
+  const lock = LockService.getDocumentLock();
+
+  if (!lock.tryLock(1500)) {
+    return getValidationResult();
+  }
+
+  try {
+    refreshAllStatuses_();
+    return getValidationResult();
+  } catch (err) {
+    console.error('runValidationNow:', err);
+    return getValidationResult();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
 function getValidationResult() {
 
   const value =
@@ -1673,14 +1697,8 @@ function checkValidation() {
         return;
       }
 
-      if (
-        result.timestamp === lastTimestamp
-      ) {
-        return;
-      }
-
       lastTimestamp =
-        result.timestamp;
+        result.timestamp || Date.now();
 
       showErrors(result);
 
@@ -1701,7 +1719,7 @@ function checkValidation() {
 
     })
 
-    .getValidationResult();
+    .runValidationNow();
 }
 
 
