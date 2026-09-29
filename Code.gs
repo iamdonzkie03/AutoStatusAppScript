@@ -1,1836 +1,1901 @@
-/**
- * PROCUREMENT MONITORING / AUTO STATUS
- * Single-file Apps Script. HTML is embedded below.
+/***************************************************************
+ * PROCUREMENT STATUS VALIDATOR
+ * Google Sheets Apps Script
  *
- * Automatic behavior:
- *  - onOpen: opens the validation monitor automatically.
- *  - onEdit: validates edited rows and automatically updates STATUS.
- *  - The monitor polls the validation result and displays all errors.
+ * TARGET SHEET:
+ *   Data List
  *
- * Status rules:
- *  Active          = bidding is ongoing / not yet completed
- *  Closed          = Eligibility Screening AND Submission of Bids
- *                    are on or before today, before award/failure
- *  Failed          = post-bidding fields complete, Supplier is blank
- *  Awarded         = post-bidding fields complete, Supplier is present
- *  Purchase Order  = Awarded + all PO fields complete
+ * IMPORTANT:
+ *   1. Paste this entire code into ONE Apps Script file.
+ *   2. Run setupValidator() ONCE manually.
+ *   3. Authorize the script.
+ *   4. After that, validation runs automatically.
  *
- * NOTE:
- * A background onEdit trigger should not attempt to create a new
- * browser modal. The monitor is opened by onOpen and remains connected
- * to onEdit through UserProperties.
- */
+ * No custom Google Sheets menu is created.
+ ***************************************************************/
 
-const CFG = {
-  TARGET_SHEET: 'Data List',
+
+/* ============================================================
+ * CONFIGURATION
+ * ============================================================ */
+
+const CONFIG = {
+  SHEET_NAME: 'Data List',
+
   HEADER_ROW: 1,
+
   STATUS_HEADER: 'STATUS',
-  ERROR_PROPERTY: 'PROCUREMENT_VALIDATION_RESULT',
-  POLL_INTERVAL_MS: 600
+
+  VALID_STATUSES: [
+    'Active',
+    'Closed',
+    'Failed',
+    'Awarded',
+    'Purchase Order',
+    'Realigned Item',
+    'Cancelled PR',
+    'Cancelled PO'
+  ],
+
+  DATE_FORMAT: 'MMMM d, yyyy',
+
+  // Maximum number of errors displayed in one dialog.
+  // Increase if necessary.
+  MAX_ERRORS_DISPLAYED: 100
 };
 
 
-/* =========================
- * AUTOMATIC EVENTS
- * =========================
+/* ============================================================
+ * RULES FROM EXCEL FILE
  *
- * IMPORTANT:
- * The actual automation uses INSTALLABLE triggers.
- * This is required because the validation monitor uses
- * authorized Apps Script services and an HTML dialog.
+ * true/required:
+ *   field must contain valid data
  *
- * Run setupAutomaticTriggers() ONCE from the Apps Script editor.
- * No custom Sheet menu is created. The setup creates only the
- * installable onEdit trigger; onOpen is the native simple trigger.
- */
+ * false/blank:
+ *   field must be blank
+ *
+ * zero:
+ *   field must contain zero / 0.00
+ *
+ * before:
+ *   date must be today or earlier
+ *
+ * after:
+ *   date must be today or later
+ *
+ * exact:
+ *   exact text is required
+ * ============================================================ */
 
-function setupAutomaticTriggers() {
+const STATUS_RULES = {
+
+  'Active': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'required',
+    'PRE-PROCUREMENT CONFERENCE': 'required',
+    'POSTING DATE': 'before',
+    'PHILGEPS REFERENCE NO.': 'required',
+    'PROJECT ID': 'required',
+    'PRE-BID CONFERENCE': 'required',
+    'ELIGIBILITY SCREENING': 'required',
+    'SUBMISSION OF BIDS': 'required',
+    'DETAILED BID EVALUATION': 'blank',
+    'POST-QUALIFICATION': 'blank',
+    'NOA DATE': 'blank',
+    'NTP DATE': 'blank',
+    'BAC RESOLUTION NO.': 'blank',
+    'SUPPLIER': 'blank',
+    'DATE PREPARED (PO)': 'blank',
+    'PO NO.': 'blank',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'required',
+    'PROCUREMENT METHOD': 'required',
+    'REMARKS': 'blank'
+  },
+
+  'Closed': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'required',
+    'PRE-PROCUREMENT CONFERENCE': 'required',
+    'POSTING DATE': 'after',
+    'PHILGEPS REFERENCE NO.': 'required',
+    'PROJECT ID': 'required',
+    'PRE-BID CONFERENCE': 'required',
+    'ELIGIBILITY SCREENING': 'required',
+    'SUBMISSION OF BIDS': 'required',
+    'DETAILED BID EVALUATION': 'blank',
+    'POST-QUALIFICATION': 'blank',
+    'NOA DATE': 'blank',
+    'NTP DATE': 'blank',
+    'BAC RESOLUTION NO.': 'blank',
+    'SUPPLIER': 'blank',
+    'DATE PREPARED (PO)': 'blank',
+    'PO NO.': 'blank',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'required',
+    'PROCUREMENT METHOD': 'required',
+    'REMARKS': 'blank'
+  },
+
+  'Failed': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'required',
+    'PRE-PROCUREMENT CONFERENCE': 'required',
+    'POSTING DATE': 'after',
+    'PHILGEPS REFERENCE NO.': 'required',
+    'PROJECT ID': 'required',
+    'PRE-BID CONFERENCE': 'required',
+    'ELIGIBILITY SCREENING': 'required',
+    'SUBMISSION OF BIDS': 'required',
+    'DETAILED BID EVALUATION': 'blank',
+    'POST-QUALIFICATION': 'blank',
+    'NOA DATE': 'blank',
+    'NTP DATE': 'blank',
+    'BAC RESOLUTION NO.': 'required',
+    'SUPPLIER': 'blank',
+    'DATE PREPARED (PO)': 'blank',
+    'PO NO.': 'blank',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'required',
+    'PROCUREMENT METHOD': 'required',
+    'REMARKS': 'blank'
+  },
+
+  'Awarded': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'required',
+    'PRE-PROCUREMENT CONFERENCE': 'required',
+    'POSTING DATE': 'after',
+    'PHILGEPS REFERENCE NO.': 'required',
+    'PROJECT ID': 'required',
+    'PRE-BID CONFERENCE': 'required',
+    'ELIGIBILITY SCREENING': 'required',
+    'SUBMISSION OF BIDS': 'required',
+    'DETAILED BID EVALUATION': 'required',
+    'POST-QUALIFICATION': 'required',
+    'NOA DATE': 'required',
+    'NTP DATE': 'required',
+    'BAC RESOLUTION NO.': 'required',
+    'SUPPLIER': 'required',
+    'DATE PREPARED (PO)': 'blank',
+    'PO NO.': 'blank',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'required',
+    'PROCUREMENT METHOD': 'required',
+    'REMARKS': 'blank'
+  },
+
+  'Purchase Order': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'required',
+    'PRE-PROCUREMENT CONFERENCE': 'required',
+    'POSTING DATE': 'after',
+    'PHILGEPS REFERENCE NO.': 'required',
+    'PROJECT ID': 'required',
+    'PRE-BID CONFERENCE': 'required',
+    'ELIGIBILITY SCREENING': 'required',
+    'SUBMISSION OF BIDS': 'required',
+    'DETAILED BID EVALUATION': 'required',
+    'POST-QUALIFICATION': 'required',
+    'NOA DATE': 'required',
+    'NTP DATE': 'required',
+    'BAC RESOLUTION NO.': 'required',
+    'SUPPLIER': 'required',
+    'DATE PREPARED (PO)': 'required',
+    'PO NO.': 'required',
+    'PO TOTAL COST': 'required',
+    'PROJECT TITLE': 'required',
+    'PROCUREMENT METHOD': 'required',
+    'REMARKS': 'blank'
+  },
+
+  'Realigned Item': {
+    'TOTAL ABC': 'zero',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'zero',
+    'PRE-PROCUREMENT CONFERENCE': 'blank',
+    'POSTING DATE': 'blank',
+    'PHILGEPS REFERENCE NO.': 'blank',
+    'PROJECT ID': 'blank',
+    'PRE-BID CONFERENCE': 'blank',
+    'ELIGIBILITY SCREENING': 'blank',
+    'SUBMISSION OF BIDS': 'blank',
+    'DETAILED BID EVALUATION': 'blank',
+    'POST-QUALIFICATION': 'blank',
+    'NOA DATE': 'blank',
+    'NTP DATE': 'blank',
+    'BAC RESOLUTION NO.': 'blank',
+    'SUPPLIER': 'blank',
+    'DATE PREPARED (PO)': 'blank',
+    'PO NO.': 'blank',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'blank',
+    'PROCUREMENT METHOD': 'blank',
+    'REMARKS': 'blank'
+  },
+
+  'Cancelled PR': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'zero',
+    'PRE-PROCUREMENT CONFERENCE': 'blank',
+    'POSTING DATE': 'blank',
+    'PHILGEPS REFERENCE NO.': 'blank',
+    'PROJECT ID': 'blank',
+    'PRE-BID CONFERENCE': 'blank',
+    'ELIGIBILITY SCREENING': 'blank',
+    'SUBMISSION OF BIDS': 'blank',
+    'DETAILED BID EVALUATION': 'blank',
+    'POST-QUALIFICATION': 'blank',
+    'NOA DATE': 'blank',
+    'NTP DATE': 'blank',
+    'BAC RESOLUTION NO.': 'blank',
+    'SUPPLIER': 'blank',
+    'DATE PREPARED (PO)': 'blank',
+    'PO NO.': 'blank',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'blank',
+    'PROCUREMENT METHOD': 'blank',
+    'REMARKS': 'exact:Cancelled PR'
+  },
+
+  'Cancelled PO': {
+    'TOTAL ABC': 'required',
+    'PR NO.': 'required',
+    'PR TOTAL ABC': 'required',
+    'PRE-PROCUREMENT CONFERENCE': 'required',
+    'POSTING DATE': 'required',
+    'PHILGEPS REFERENCE NO.': 'required',
+    'PROJECT ID': 'required',
+    'PRE-BID CONFERENCE': 'required',
+    'ELIGIBILITY SCREENING': 'required',
+    'SUBMISSION OF BIDS': 'required',
+    'DETAILED BID EVALUATION': 'required',
+    'POST-QUALIFICATION': 'required',
+    'NOA DATE': 'required',
+    'NTP DATE': 'required',
+    'BAC RESOLUTION NO.': 'required',
+    'SUPPLIER': 'required',
+    'DATE PREPARED (PO)': 'required',
+    'PO NO.': 'required',
+    'PO TOTAL COST': 'blank',
+    'PROJECT TITLE': 'required',
+    'PROCUREMENT METHOD': 'required',
+    'REMARKS': 'exact:Cancelled PO'
+  }
+};
+
+
+/* ============================================================
+ * FORMAT DEFINITIONS FROM EXCEL
+ * ============================================================ */
+
+const FIELD_FORMATS = {
+
+  'TOTAL ABC': 'numeric',
+
+  'PR NO.': 'text',
+
+  'PR TOTAL ABC': 'numeric',
+
+  'PRE-PROCUREMENT CONFERENCE': 'date',
+
+  'POSTING DATE': 'date',
+
+  'PHILGEPS REFERENCE NO.': 'numeric',
+
+  'PROJECT ID': 'text',
+
+  'PRE-BID CONFERENCE': 'date',
+
+  'ELIGIBILITY SCREENING': 'date',
+
+  'SUBMISSION OF BIDS': 'date',
+
+  'DETAILED BID EVALUATION': 'date',
+
+  'POST-QUALIFICATION': 'date',
+
+  'NOA DATE': 'date',
+
+  'NTP DATE': 'date',
+
+  'BAC RESOLUTION NO.': 'text',
+
+  'SUPPLIER': 'text',
+
+  'DATE PREPARED (PO)': 'date',
+
+  'PO NO.': 'text',
+
+  'PO TOTAL COST': 'numeric',
+
+  'PROJECT TITLE': 'text',
+
+  'PROCUREMENT METHOD': 'text',
+
+  'REMARKS': 'text'
+};
+
+
+/* ============================================================
+ * INSTALLATION
+ *
+ * RUN THIS FUNCTION ONE TIME MANUALLY.
+ *
+ * It creates an installable onEdit trigger.
+ *
+ * No menu is created.
+ * ============================================================ */
+
+function setupValidator() {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const targetSheet = ss.getSheetByName(CFG.TARGET_SHEET);
 
-  if (!targetSheet) {
-    throw new Error('Sheet "' + CFG.TARGET_SHEET + '" was not found.');
-  }
+  // Remove duplicate validator triggers.
+  const triggers = ScriptApp.getProjectTriggers();
 
-  /*
-   * Remove previous copies of our installable triggers so
-   * repeated setup does not create duplicate executions.
-   */
-  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+  triggers.forEach(trigger => {
 
     const handler = trigger.getHandlerFunction();
 
-    if (
-      handler === 'handleOpen_' ||
-      handler === 'handleEdit_'
-    ) {
+    if (handler === 'validatorOnEdit') {
       ScriptApp.deleteTrigger(trigger);
     }
+
   });
 
-  ScriptApp
-    .newTrigger('handleEdit_')
+  // Create the installable edit trigger.
+  ScriptApp.newTrigger('validatorOnEdit')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
-  /*
-   * Run the same logic immediately so the current sheet
-   * does not need to be closed/reopened after setup.
-   */
-  handleOpen_();
-}
+  // Make sure the target sheet exists.
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
 
-
-function refreshAllStatuses_() {
-
-  const sheet = getTargetSheet_();
-
-  if (!sheet) return;
-
-  const lastRow = sheet.getLastRow();
-
-  if (lastRow <= CFG.HEADER_ROW) {
-    saveValidationResult_(sheet, []);
-    return;
+  if (!sheet) {
+    throw new Error(
+      'Sheet "' + CONFIG.SHEET_NAME + '" was not found.'
+    );
   }
 
-  let allErrors = [];
-
-  for (
-    let row = CFG.HEADER_ROW + 1;
-    row <= lastRow;
-    row++
-  ) {
-
-    const result =
-      processRow_(sheet, row);
-
-    allErrors =
-      allErrors.concat(
-        result.errors
-      );
-  }
-
-  allErrors =
-    removeDuplicateErrors_(allErrors);
-
-  /*
-   * Save the current validation state so the modeless monitor
-   * can display errors immediately on opening.
-   */
-  saveValidationResult_(
-    sheet,
-    allErrors
+  SpreadsheetApp.getActive().toast(
+    'Procurement validator installed successfully.',
+    'Validator',
+    5
   );
-
-  SpreadsheetApp.flush();
 }
 
 
-/*
- * Installable OPEN trigger.
- */
-function handleOpen_(e) {
+/* ============================================================
+ * AUTOMATIC EDIT TRIGGER
+ * ============================================================ */
+
+function validatorOnEdit(e) {
 
   try {
-    refreshAllStatuses_();
-  } catch (err) {
-    console.error('handleOpen_/refreshAllStatuses_:', err);
-  }
 
-}
-
-
-/*
- * Installable EDIT trigger.
- */
-function handleEdit_(e) {
-
-  if (!e || !e.range) return;
-
-  const lock = LockService.getDocumentLock();
-
-  if (!lock.tryLock(1500)) return;
-
-  try {
+    if (!e || !e.range) return;
 
     const range = e.range;
     const sheet = range.getSheet();
 
-    // This automation runs ONLY on the Data List sheet.
-    if (sheet.getName() !== CFG.TARGET_SHEET) {
-      return;
-    }
+    // ONLY Data List
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+
+    // Ignore header
+    if (range.getRow() <= CONFIG.HEADER_ROW) return;
+
+    const headers = getHeaders_(sheet);
+
+    const statusColumn =
+      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+
+    if (statusColumn <= 0) return;
+
+    const firstRow = range.getRow();
+    const lastRow =
+      firstRow + range.getNumRows() - 1;
+
+    const allErrors = [];
 
     /*
-     * Ignore the header row.
+     * Process every affected row.
      */
-    if (
-      range.getLastRow() <= CFG.HEADER_ROW
-    ) {
-      return;
-    }
-
-    const firstRow = Math.max(
-      range.getRow(),
-      CFG.HEADER_ROW + 1
-    );
-
-    const lastRow =
-      range.getRow() +
-      range.getNumRows() -
-      1;
-
-    let allErrors = [];
-
     for (
       let row = firstRow;
       row <= lastRow;
       row++
     ) {
 
-      const result =
-        processRow_(sheet, row);
-
-      allErrors =
-        allErrors.concat(
-          result.errors
+      /*
+       * ------------------------------------------------------
+       * 1. AUTOMATICALLY DETERMINE STATUS
+       * ------------------------------------------------------
+       */
+      const automaticStatus =
+        determineAutomaticStatus_(
+          sheet,
+          row,
+          headers
         );
-    }
-
-    allErrors =
-      removeDuplicateErrors_(allErrors);
-
-    saveValidationResult_(
-      sheet,
-      allErrors
-    );
-
-  } catch (err) {
-
-    console.error(
-      'handleEdit_:',
-      err
-    );
-
-  } finally {
-
-    lock.releaseLock();
-  }
-}
-
-
-/*
- * Kept as lightweight fallbacks for compatibility.
- *
- * The installable onEdit trigger is authoritative for data processing.
- * The native simple onOpen trigger owns the UI because opening an
- * HtmlService window is a spreadsheet UI operation.
- */
-function onOpen(e) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-
-  // Do not run or open the monitor for any sheet other than Data List.
-  if (!sheet || sheet.getName() !== CFG.TARGET_SHEET) {
-    return;
-  }
-
-  // Native simple onOpen owns the UI action. This is deliberately
-  // separate from the authorized installable trigger used for data work.
-  try {
-    openValidationMonitor_();
-  } catch (err) {
-    console.error('onOpen/openValidationMonitor_:', err);
-  }
-}
-
-
-function onEdit(e) {
-  return;
-}
-
-
-function getTargetSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  return ss.getSheetByName(CFG.TARGET_SHEET);
-}
-
-
-/* =========================
- * ROW PROCESSING
- * ========================= */
-
-function processRow_(sheet, row) {
-  const data = getRowData_(sheet, row);
-
-  // STATUS itself must never count as user input.
-  // Otherwise an existing status (for example "Active") makes an
-  // otherwise blank row look non-empty and causes the script to assign
-  // a status again.
-  if (!data || isProcurementInputEmpty_(data)) {
-    setStatus_(sheet, row, '');
-    return { status: '', errors: [] };
-  }
-
-  const errors = [];
-  const status = determineStatus_(data, errors);
-
-  // A blank status is always written back as blank.
-  setStatus_(sheet, row, status);
-
-  /*
-   * Validate the values that were actually entered BEFORE
-   * applying status-specific required-field rules.
-   *
-   * This is important when a row is incomplete and therefore
-   * has no status yet. Invalid dates/numbers must still be
-   * reported in the modal.
-   */
-  validateEnteredFields_(data, errors);
-
-  /*
-   * If a procurement row has started but does not yet qualify
-   * for a status, use Active's required-field rules only for
-   * validation. This does NOT write Active into STATUS.
-   */
-  const validationStatus =
-    status || 'Active';
-
-  validateForStatus_(
-    data,
-    validationStatus,
-    errors
-  );
-
-  return {
-    status: status,
-    errors: removeDuplicateErrors_(errors)
-  };
-}
-
-
-/* =========================
- * AUTOMATIC STATUS
- * ========================= */
-
-function determineStatus_(data, errors) {
-
-  // Never assign a status to a row that has no procurement input.
-  // This check is intentionally independent of the STATUS cell itself.
-  if (isProcurementInputEmpty_(data)) {
-    return '';
-  }
-
-  /*
-   * Do not assign Active/Closed/Awarded/Failed/Purchase Order
-   * until POSTING DATE has been entered and is valid.
-   * Validation still runs separately, so an invalid Posting Date
-   * is reported instead of silently producing a status.
-   */
-  const postingKey = normalizeHeader_('POSTING DATE');
-
-  if (data.columns[postingKey] === undefined) {
-    return '';
-  }
-
-  const postingIndex = data.columns[postingKey];
-  const postingRaw = data.values[postingIndex];
-  const postingDisplay = String(
-    data.displayValues[postingIndex] || ''
-  ).trim();
-
-  if (
-    !postingDisplay ||
-    !isValidDate_(postingRaw, postingDisplay)
-  ) {
-    return '';
-  }
-
-  const awardFields = [
-    'PRE-PROCUREMENT CONFERENCE',
-    'PRE-BID CONFERENCE',
-    'POSTING DATE',
-    'PROJECT ID',
-    'ELIGIBILITY SCREENING',
-    'SUBMISSION OF BIDS',
-    'DETAILED BID EVALUATION',
-    'POST-QUALIFICATION',
-    'NOA DATE'
-  ];
-
-  const poFields = [
-    'PRE-PROCUREMENT CONFERENCE',
-    'PRE-BID CONFERENCE',
-    'POSTING DATE',
-    'PROJECT ID',
-    'ELIGIBILITY SCREENING',
-    'SUBMISSION OF BIDS',
-    'DETAILED BID EVALUATION',
-    'POST-QUALIFICATION',
-    'NOA DATE',
-    'NTP DATE',
-    'PO DATE',
-    'PO NO.',
-    'PO TOTAL COST'
-  ];
-
-  const basicFields = [
-    'POSTING DATE',
-    'PRE-PROCUREMENT CONFERENCE',
-    'PROJECT ID',
-    'PRE-BID CONFERENCE',
-    'ELIGIBILITY SCREENING',
-    'SUBMISSION OF BIDS'
-  ];
-
-  const awardComplete = allFieldsPresent_(data, awardFields);
-  const awardValid = allFieldsCorrectlyFormatted_(data, awardFields);
-
-  const supplier = String(getValue_(data, 'SUPPLIER') || '').trim();
-  const hasSupplier = supplier !== '';
-
-  const poComplete = allFieldsPresent_(data, poFields);
-  const poValid = allFieldsCorrectlyFormatted_(data, poFields);
-
-  /*
-   * Purchase Order is the final stage.
-   * Supplier must exist because PO is an awarded procurement.
-   */
-  if (
-    awardComplete &&
-    awardValid &&
-    hasSupplier &&
-    poComplete &&
-    poValid
-  ) {
-    return 'Purchase Order';
-  }
-
-  /*
-   * Awarded = completed post-bidding information + Supplier.
-   */
-  if (
-    awardComplete &&
-    awardValid &&
-    hasSupplier
-  ) {
-    return 'Awarded';
-  }
-
-  /*
-   * Failed = completed post-bidding information + NO Supplier.
-   *
-   * Supplier is deliberately NOT required here.
-   */
-  if (
-    awardComplete &&
-    awardValid &&
-    !hasSupplier
-  ) {
-    return 'Failed';
-  }
-
-  /*
-   * Before Awarded/Failed, determine Active vs Closed.
-   */
-  const eligibility = getDate_(data, 'ELIGIBILITY SCREENING');
-  const submission = getDate_(data, 'SUBMISSION OF BIDS');
-
-  const today = startOfDay_(new Date());
-
-  /*
-   * Once both bidding dates have passed, status is Closed.
-   * Awarded/Failed has already been checked above.
-   */
-  if (
-    eligibility &&
-    submission &&
-    eligibility <= today &&
-    submission <= today
-  ) {
-    return 'Closed';
-  }
-
-  return 'Active';
-}
-
-
-/* =========================
- * ENTERED-VALUE VALIDATION
- * ========================= */
-
-/*
- * Validate every date/number that the user has actually entered,
- * independently of STATUS.
- *
- * This guarantees that an invalid date or number is reported even
- * when the row is incomplete and STATUS is still blank.
- */
-function validateEnteredFields_(data, errors) {
-
-  const dateFields = [
-    'POSTING DATE',
-    'PRE-PROCUREMENT CONFERENCE',
-    'PRE-BID CONFERENCE',
-    'ELIGIBILITY SCREENING',
-    'SUBMISSION OF BIDS',
-    'POST-QUALIFICATION',
-    'DETAILED BID EVALUATION',
-    'NOA DATE',
-    'NTP DATE',
-    'PO DATE'
-  ];
-
-  dateFields.forEach(function(field) {
-
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) return;
-
-    const index = data.columns[key];
-
-    const raw = data.values[index];
-
-    const display =
-      String(data.displayValues[index] || '').trim();
-
-    if (!display) return;
-
-    if (!isValidDate_(raw, display)) {
-      addError_(
-        errors,
-        data.row,
-        field,
-        'Please use correct date format.'
-      );
-    }
-  });
-
-  /*
-   * Numeric fields are checked whenever they contain a value.
-   */
-  [
-    'TOTAL ABC',
-    'PO TOTAL COST'
-  ].forEach(function(field) {
-
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) return;
-
-    const index = data.columns[key];
-
-    const raw = data.values[index];
-
-    const display =
-      String(data.displayValues[index] || '').trim();
-
-    if (!display) return;
-
-    if (!isValidNumeric_(raw, display)) {
-      addError_(
-        errors,
-        data.row,
-        field,
-        'Please enter a numeric value with decimals.'
-      );
-    }
-  });
-}
-
-
-/* =========================
- * STATUS-SPECIFIC VALIDATION
- * ========================= */
-
-function validateForStatus_(data, status, errors) {
-
-  if (status === 'Active') {
-
-    validateDateFields_(
-      data,
-      errors,
-      [
-        'POSTING DATE',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PRE-BID CONFERENCE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS'
-      ]
-    );
-
-    validateRequiredFields_(
-      data,
-      errors,
-      [
-        'POSTING DATE',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PROJECT ID',
-        'PRE-BID CONFERENCE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS'
-      ]
-    );
-
-    validateProjectId_(data, errors);
-
-    validateDateRelativeToToday_(
-      data,
-      errors,
-      true
-    );
-  }
-
-
-  else if (status === 'Closed') {
-
-    validateDateFields_(
-      data,
-      errors,
-      [
-        'POSTING DATE',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PRE-BID CONFERENCE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS'
-      ]
-    );
-
-    validateRequiredFields_(
-      data,
-      errors,
-      [
-        'POSTING DATE',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PROJECT ID',
-        'PRE-BID CONFERENCE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS'
-      ]
-    );
-
-    validateProjectId_(data, errors);
-  }
-
-
-  else if (
-    status === 'Awarded' ||
-    status === 'Failed'
-  ) {
-
-    validateRequiredFields_(
-      data,
-      errors,
-      [
-        'PROJECT ID',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PRE-BID CONFERENCE',
-        'POSTING DATE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS',
-        'POST-QUALIFICATION',
-        'DETAILED BID EVALUATION',
-        'NOA DATE'
-      ]
-    );
-
-    validateDateFields_(
-      data,
-      errors,
-      [
-        'POSTING DATE',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PRE-BID CONFERENCE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS',
-        'POST-QUALIFICATION',
-        'DETAILED BID EVALUATION',
-        'NOA DATE'
-      ]
-    );
-
-    validateProjectId_(data, errors);
-
-    /*
-     * Supplier:
-     *   Awarded -> required
-     *   Failed  -> must be blank / not required
-     */
-    const supplier = String(
-      getValue_(data, 'SUPPLIER') || ''
-    ).trim();
-
-    if (status === 'Awarded') {
-
-      if (!supplier) {
-        addError_(
-          errors,
-          data.row,
-          'SUPPLIER',
-          'There is no data inputted.'
-        );
-      } else {
-        validateTextField_(
-          data,
-          errors,
-          'SUPPLIER'
-        );
-      }
-
-    } else if (status === 'Failed') {
 
       /*
-       * No Supplier error for Failed.
-       * Supplier is the field that distinguishes Failed
-       * from Awarded.
+       * Write the automatically determined status.
+       *
+       * We only write when a status can actually be determined.
        */
-      if (supplier) {
-        addError_(
-          errors,
-          data.row,
-          'SUPPLIER',
-          'Supplier should be blank for Failed status.'
-        );
+      if (automaticStatus) {
+
+        const statusCell =
+          sheet.getRange(
+            row,
+            statusColumn
+          );
+
+        const currentStatus =
+          normalizeText_(
+            statusCell.getDisplayValue()
+          );
+
+        if (currentStatus !== automaticStatus) {
+
+          statusCell.setValue(
+            automaticStatus
+          );
+
+        }
+
       }
+
+      /*
+       * ------------------------------------------------------
+       * 2. GET THE RESULTING STATUS
+       * ------------------------------------------------------
+       */
+      const status =
+        normalizeText_(
+          sheet
+            .getRange(
+              row,
+              statusColumn
+            )
+            .getDisplayValue()
+        );
+
+      /*
+       * Nothing to validate until a status has been determined.
+       */
+      if (!status) continue;
+
+      /*
+       * ------------------------------------------------------
+       * 3. VALIDATE THE ROW
+       * ------------------------------------------------------
+       */
+      if (!STATUS_RULES[status]) {
+
+        allErrors.push({
+          row: row,
+          status: status,
+          field: 'STATUS',
+          message:
+            'Invalid automatically determined status.'
+        });
+
+        continue;
+      }
+
+      const rowErrors =
+        validateRow_(
+          sheet,
+          row,
+          headers,
+          status
+        );
+
+      rowErrors.forEach(
+        error => allErrors.push(error)
+      );
+
     }
+
+    /*
+     * --------------------------------------------------------
+     * 4. SHOW ONE MODAL CONTAINING ALL ERRORS
+     * --------------------------------------------------------
+     */
+    if (allErrors.length > 0) {
+
+      showValidationModal_(
+        allErrors
+      );
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      'validatorOnEdit error:',
+      error
+    );
+
   }
+}
 
+/* ============================================================
+ * AUTOMATIC STATUS DETERMINATION
+ * ============================================================ */
 
-  else if (status === 'Purchase Order') {
+function determineAutomaticStatus_(
+  sheet,
+  row,
+  headers
+) {
 
-    validateRequiredFields_(
-      data,
-      errors,
-      [
-        'PROJECT ID',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PRE-BID CONFERENCE',
-        'POSTING DATE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS',
-        'POST-QUALIFICATION',
-        'DETAILED BID EVALUATION',
-        'NOA DATE',
-        'NTP DATE',
-        'PO DATE',
-        'PO NO.',
-        'PO TOTAL COST',
-        'SUPPLIER'
-      ]
-    );
+  const data = {};
 
-    validateDateFields_(
-      data,
-      errors,
-      [
-        'POSTING DATE',
-        'PRE-PROCUREMENT CONFERENCE',
-        'PRE-BID CONFERENCE',
-        'ELIGIBILITY SCREENING',
-        'SUBMISSION OF BIDS',
-        'POST-QUALIFICATION',
-        'DETAILED BID EVALUATION',
-        'NOA DATE',
-        'NTP DATE',
-        'PO DATE'
-      ]
-    );
+  headers.forEach(
+    (header, index) => {
 
-    validateProjectId_(data, errors);
+      if (!header) return;
 
-    validateTextField_(
-      data,
-      errors,
-      'SUPPLIER'
-    );
+      data[header] =
+        sheet
+          .getRange(
+            row,
+            index + 1
+          )
+          .getValue();
 
-    validateTextField_(
-      data,
-      errors,
-      'PO NO.'
-    );
+    }
+  );
 
-    validateNumericField_(
-      data,
-      errors,
-      'PO TOTAL COST'
-    );
-  }
 
   /*
-   * TOTAL ABC is checked for every status when present.
+   * ----------------------------------------------------------
+   * CANCELLED PR
+   * ----------------------------------------------------------
    */
-  validateNumericField_(
-    data,
-    errors,
-    'TOTAL ABC'
-  );
-}
 
-
-/* =========================
- * REQUIRED FIELDS
- * ========================= */
-
-function validateRequiredFields_(data, errors, fields) {
-
-  fields.forEach(function(field) {
-
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) return;
-
-    const value = getValue_(data, field);
-
-    if (String(value || '').trim() === '') {
-
-      addError_(
-        errors,
-        data.row,
-        field,
-        'There is no data inputted.'
-      );
-    }
-  });
-}
-
-
-function allFieldsPresent_(data, fields) {
-
-  return fields.every(function(field) {
-
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) {
-      return false;
-    }
-
-    return String(
-      getValue_(data, field) || ''
-    ).trim() !== '';
-  });
-}
-
-
-/* =========================
- * DATE VALIDATION
- * ========================= */
-
-function validateDateFields_(data, errors, fields) {
-
-  fields.forEach(function(field) {
-
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) return;
-
-    const index = data.columns[key];
-
-    const raw = data.values[index];
-
-    const display = String(
-      data.displayValues[index] || ''
-    ).trim();
-
-    if (display === '') return;
-
-    if (!isValidDate_(raw, display)) {
-
-      addError_(
-        errors,
-        data.row,
-        field,
-        'Please use correct date format.'
-      );
-    }
-  });
-}
-
-
-function allFieldsCorrectlyFormatted_(data, fields) {
-
-  return fields.every(function(field) {
-
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) {
-      return false;
-    }
-
-    const index = data.columns[key];
-
-    const raw = data.values[index];
-
-    const display = String(
-      data.displayValues[index] || ''
-    ).trim();
-
-    if (display === '') return false;
-
-    if (isDateField_(field)) {
-      return isValidDate_(raw, display);
-    }
+  if (
+    textEquals_(
+      data['REMARKS'],
+      'Cancelled PR'
+    )
+  ) {
 
     if (
-      field === 'TOTAL ABC' ||
-      field === 'PO TOTAL COST'
+      isZero_(
+        data['PR TOTAL ABC'],
+        displayValue_(
+          sheet,
+          row,
+          headers,
+          'PR TOTAL ABC'
+        )
+      )
     ) {
-      return isValidNumeric_(raw, display);
+
+      return 'Cancelled PR';
+
+    }
+  }
+
+
+  /*
+   * ----------------------------------------------------------
+   * CANCELLED PO
+   * ----------------------------------------------------------
+   */
+
+  if (
+    textEquals_(
+      data['REMARKS'],
+      'Cancelled PO'
+    )
+  ) {
+
+    if (
+      hasValue_(data['PO NO.']) === false &&
+      hasValue_(data['PO TOTAL COST']) === false
+    ) {
+
+      return null;
+
     }
 
-    return true;
-  });
-}
+    /*
+     * Cancelled PO requires the PO number to exist,
+     * while PO TOTAL COST must be blank.
+     */
+    if (
+      hasValue_(data['PO NO.']) &&
+      !hasValue_(data['PO TOTAL COST'])
+    ) {
+
+      return 'Cancelled PO';
+
+    }
+  }
 
 
-function isDateField_(field) {
+  /*
+   * ----------------------------------------------------------
+   * REALIGNED ITEM
+   * ----------------------------------------------------------
+   */
 
-  const fields = [
-    'POSTING DATE',
+  if (
+    isZero_(
+      data['TOTAL ABC'],
+      displayValue_(
+        sheet,
+        row,
+        headers,
+        'TOTAL ABC'
+      )
+    ) &&
+
+    isZero_(
+      data['PR TOTAL ABC'],
+      displayValue_(
+        sheet,
+        row,
+        headers,
+        'PR TOTAL ABC'
+      )
+    ) &&
+
+    hasValue_(data['PR NO.'])
+  ) {
+
+    const realignmentFields = [
+      'PRE-PROCUREMENT CONFERENCE',
+      'POSTING DATE',
+      'PHILGEPS REFERENCE NO.',
+      'PROJECT ID',
+      'PRE-BID CONFERENCE',
+      'ELIGIBILITY SCREENING',
+      'SUBMISSION OF BIDS',
+      'DETAILED BID EVALUATION',
+      'POST-QUALIFICATION',
+      'NOA DATE',
+      'NTP DATE',
+      'BAC RESOLUTION NO.',
+      'SUPPLIER',
+      'DATE PREPARED (PO)',
+      'PO NO.',
+      'PO TOTAL COST',
+      'PROJECT TITLE',
+      'PROCUREMENT METHOD'
+    ];
+
+    const allBlank =
+      realignmentFields.every(
+        field =>
+          !hasValue_(data[field])
+      );
+
+    if (allBlank) {
+      return 'Realigned Item';
+    }
+  }
+
+
+  /*
+   * ----------------------------------------------------------
+   * PURCHASE ORDER
+   * ----------------------------------------------------------
+   */
+
+  if (
+    hasValue_(
+      data['DATE PREPARED (PO)']
+    ) &&
+
+    hasValue_(
+      data['PO NO.']
+    ) &&
+
+    hasValue_(
+      data['PO TOTAL COST']
+    ) &&
+
+    hasValue_(
+      data['SUPPLIER']
+    ) &&
+
+    hasValue_(
+      data['NOA DATE']
+    ) &&
+
+    hasValue_(
+      data['NTP DATE']
+    )
+  ) {
+
+    return 'Purchase Order';
+
+  }
+
+
+  /*
+   * ----------------------------------------------------------
+   * AWARDED
+   * ----------------------------------------------------------
+   */
+
+  if (
+    hasValue_(
+      data['DETAILED BID EVALUATION']
+    ) &&
+
+    hasValue_(
+      data['POST-QUALIFICATION']
+    ) &&
+
+    hasValue_(
+      data['NOA DATE']
+    ) &&
+
+    hasValue_(
+      data['NTP DATE']
+    ) &&
+
+    hasValue_(
+      data['BAC RESOLUTION NO.']
+    ) &&
+
+    hasValue_(
+      data['SUPPLIER']
+    ) &&
+
+    !hasValue_(
+      data['DATE PREPARED (PO)']
+    ) &&
+
+    !hasValue_(
+      data['PO NO.']
+    ) &&
+
+    !hasValue_(
+      data['PO TOTAL COST']
+    )
+  ) {
+
+    return 'Awarded';
+
+  }
+
+
+  /*
+   * ----------------------------------------------------------
+   * FAILED
+   * ----------------------------------------------------------
+   */
+
+  if (
+    hasValue_(
+      data['BAC RESOLUTION NO.']
+    ) &&
+
+    !hasValue_(
+      data['SUPPLIER']
+    ) &&
+
+    !hasValue_(
+      data['DETAILED BID EVALUATION']
+    ) &&
+
+    !hasValue_(
+      data['POST-QUALIFICATION']
+    ) &&
+
+    !hasValue_(
+      data['NOA DATE']
+    ) &&
+
+    !hasValue_(
+      data['NTP DATE']
+    )
+  ) {
+
+    return 'Failed';
+
+  }
+
+
+  /*
+   * ----------------------------------------------------------
+   * ACTIVE / CLOSED
+   * ----------------------------------------------------------
+   *
+   * Both have the same required fields.
+   * The difference in the Excel file is POSTING DATE:
+   *
+   * Active = before/today
+   * Closed = after/today
+   */
+
+  const basicFields = [
+    'TOTAL ABC',
+    'PR NO.',
+    'PR TOTAL ABC',
     'PRE-PROCUREMENT CONFERENCE',
+    'POSTING DATE',
+    'PHILGEPS REFERENCE NO.',
+    'PROJECT ID',
     'PRE-BID CONFERENCE',
     'ELIGIBILITY SCREENING',
     'SUBMISSION OF BIDS',
-    'POST-QUALIFICATION',
-    'DETAILED BID EVALUATION',
-    'NOA DATE',
-    'NTP DATE',
-    'PO DATE'
+    'PROJECT TITLE',
+    'PROCUREMENT METHOD'
   ];
 
-  return fields.indexOf(
-    normalizeHeader_(field)
-  ) !== -1;
-}
+  const basicConditionsMet =
+    basicFields.every(
+      field =>
+        hasValue_(data[field])
+    );
 
+  if (basicConditionsMet) {
 
-function isValidDate_(raw, display) {
+    const postingDate =
+      normalizeDate_(
+        data['POSTING DATE']
+      );
 
-  if (
-    raw instanceof Date &&
-    !isNaN(raw.getTime())
-  ) {
-    return true;
+    if (postingDate) {
+
+      const today =
+        normalizeDate_(
+          new Date()
+        );
+
+      if (
+        postingDate.getTime() >
+        today.getTime()
+      ) {
+
+        return 'Closed';
+
+      }
+
+      return 'Active';
+
+    }
   }
 
-  const normalized = display
-    .trim()
-    .toLowerCase();
-
-  if (
-    normalized === 'n/a' ||
-    normalized === 'na' ||
-    normalized === 'not applicable'
-  ) {
-    return true;
-  }
 
   /*
-   * Required text date format:
-   * January 5, 2026
+   * ----------------------------------------------------------
+   * No complete status yet.
+   * ----------------------------------------------------------
    */
-  const pattern =
-    /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}$/i;
 
-  if (!pattern.test(display)) {
+  return null;
+}
+
+/* ============================================================
+ * AUTOMATIC STATUS HELPERS
+ * ============================================================ */
+
+function hasValue_(value) {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
     return false;
   }
 
-  const parsed = new Date(display);
-
-  return !isNaN(parsed.getTime());
-}
-
-
-/* =========================
- * ACTIVE DATE RULES
- * ========================= */
-
-function validateDateRelativeToToday_(
-  data,
-  errors,
-  reportPastDates
-) {
-
-  if (!reportPastDates) return;
-
-  const today = startOfDay_(new Date());
-
-  [
-    'ELIGIBILITY SCREENING',
-    'SUBMISSION OF BIDS'
-  ].forEach(function(field) {
-
-    const date = getDate_(data, field);
-
-    if (!date) return;
-
-    if (date <= today) {
-
-      addError_(
-        errors,
-        data.row,
-        field,
-        'Not applicable'
-      );
-    }
-  });
-}
-
-
-function getDate_(data, field) {
-
-  const key = normalizeHeader_(field);
-
-  if (data.columns[key] === undefined) {
-    return null;
-  }
-
-  const index = data.columns[key];
-
-  const raw = data.values[index];
-
-  const display = String(
-    data.displayValues[index] || ''
-  ).trim();
-
-  if (!display) return null;
-
   if (
-    raw instanceof Date &&
-    !isNaN(raw.getTime())
+    typeof value === 'string' &&
+    value.trim() === ''
   ) {
-
-    return startOfDay_(
-      new Date(raw)
-    );
+    return false;
   }
-
-  if (!isValidDate_(raw, display)) {
-    return null;
-  }
-
-  return startOfDay_(
-    new Date(display)
-  );
-}
-
-
-function startOfDay_(date) {
-
-  date.setHours(
-    0,
-    0,
-    0,
-    0
-  );
-
-  return date;
-}
-
-
-/* =========================
- * PROJECT ID
- * ========================= */
-
-function validateProjectId_(data, errors) {
-
-  const key = 'PROJECT ID';
-
-  if (data.columns[key] === undefined) return;
-
-  const value = String(
-    getValue_(data, key) || ''
-  ).trim();
-
-  /*
-   * PROJECT ID is free-form text.
-   * Letters, numbers, spaces, punctuation and symbols are all allowed.
-   * The only invalid value for this format check is blank.
-   */
-  if (!value) {
-    return;
-  }
-}
-
-
-/* =========================
- * FREE-FORM TEXT
- * =========================
- *
- * Former "alphanumeric" fields now accept:
- *   - letters
- *   - numbers
- *   - spaces
- *   - punctuation
- *   - symbols
- *   - special characters
- *   - any combination of the above
- *
- * The format validator only rejects a blank value when the field
- * is required. It does NOT restrict characters.
- * ========================= */
-
-function validateTextField_(
-  data,
-  errors,
-  field
-) {
-
-  const key = normalizeHeader_(field);
-
-  if (data.columns[key] === undefined) return;
-
-  const value = String(
-    getValue_(data, field) || ''
-  ).trim();
-
-  /*
-   * Free-form text:
-   * No character whitelist is applied.
-   */
-  if (!value) {
-    return;
-  }
-}
-
-
-/* =========================
- * NUMERIC
- * ========================= */
-
-function validateNumericField_(
-  data,
-  errors,
-  field
-) {
-
-  const key = normalizeHeader_(field);
-
-  if (data.columns[key] === undefined) return;
-
-  const index = data.columns[key];
-
-  const raw = data.values[index];
-
-  const display = String(
-    data.displayValues[index] || ''
-  ).trim();
-
-  if (!display) return;
-
-  if (
-    typeof raw === 'number' &&
-    !isNaN(raw)
-  ) {
-    return;
-  }
-
-  const cleaned = display
-    .replace(/,/g, '')
-    .replace(/\s/g, '');
-
-  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) {
-
-    addError_(
-      errors,
-      data.row,
-      field,
-      'Please enter a numeric value with decimals.'
-    );
-  }
-}
-
-
-function isValidNumeric_(raw, display) {
-
-  if (
-    typeof raw === 'number' &&
-    !isNaN(raw)
-  ) {
-    return true;
-  }
-
-  return /^-?\d+(\.\d+)?$/.test(
-    display
-      .replace(/,/g, '')
-      .replace(/\s/g, '')
-  );
-}
-
-
-/* =========================
- * SHEET DATA
- * ========================= */
-
-function getRowData_(sheet, row) {
-
-  const lastColumn = sheet.getLastColumn();
-
-  if (lastColumn < 1) return null;
-
-  const headers =
-    sheet
-      .getRange(
-        CFG.HEADER_ROW,
-        1,
-        1,
-        lastColumn
-      )
-      .getDisplayValues()[0];
-
-  const values =
-    sheet
-      .getRange(
-        row,
-        1,
-        1,
-        lastColumn
-      )
-      .getValues()[0];
-
-  const displayValues =
-    sheet
-      .getRange(
-        row,
-        1,
-        1,
-        lastColumn
-      )
-      .getDisplayValues()[0];
-
-  return {
-    sheet: sheet,
-    row: row,
-    headers: headers,
-    values: values,
-    displayValues: displayValues,
-    columns: buildColumnMap_(headers)
-  };
-}
-
-
-function buildColumnMap_(headers) {
-
-  const map = {};
-
-  headers.forEach(function(header, index) {
-
-    const key = normalizeHeader_(header);
-
-    if (key) {
-      map[key] = index;
-    }
-  });
-
-  return map;
-}
-
-
-function getValue_(data, field) {
-
-  const key = normalizeHeader_(field);
-
-  if (data.columns[key] === undefined) {
-    return '';
-  }
-
-  const index = data.columns[key];
-
-  if (
-    data.displayValues[index] !== ''
-  ) {
-    return data.displayValues[index];
-  }
-
-  return data.values[index];
-}
-
-
-function normalizeHeader_(value) {
-
-  return String(value || '')
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, ' ');
-}
-
-
-const PROCUREMENT_INPUT_FIELDS = [
-  'POSTING DATE',
-  'PRE-PROCUREMENT CONFERENCE',
-  'PROJECT ID',
-  'PRE-BID CONFERENCE',
-  'ELIGIBILITY SCREENING',
-  'SUBMISSION OF BIDS',
-  'DETAILED BID EVALUATION',
-  'POST-QUALIFICATION',
-  'NOA DATE',
-  'NTP DATE',
-  'PO DATE',
-  'PO NO.',
-  'PO TOTAL COST',
-  'SUPPLIER',
-  'TOTAL ABC'
-];
-
-function isProcurementInputEmpty_(data) {
-  /*
-   * Only explicit procurement input fields count.
-   * STATUS, formulas, helper columns, and formatting artifacts
-   * do not make an otherwise blank row a procurement record.
-   */
-  return PROCUREMENT_INPUT_FIELDS.every(function(field) {
-    const key = normalizeHeader_(field);
-
-    if (data.columns[key] === undefined) {
-      return true;
-    }
-
-    const index = data.columns[key];
-
-    return String(
-      data.displayValues[index] || ''
-    ).trim() === '';
-  });
-}
-
-
-function isDataRowEmpty_(data) {
-
-  // Ignore the STATUS column completely when deciding whether
-  // the row contains actual procurement data.
-  return data.headers.every(function(header, index) {
-
-    if (
-      normalizeHeader_(header) ===
-      CFG.STATUS_HEADER
-    ) {
-      return true;
-    }
-
-    return String(
-      data.displayValues[index] || ''
-    ).trim() === '';
-  });
-}
-
-
-/* =========================
- * STATUS WRITING
- * ========================= */
-
-function setStatus_(sheet, row, status) {
-
-  const lastColumn = sheet.getLastColumn();
-
-  if (lastColumn < 1) return;
-
-  const headers =
-    sheet
-      .getRange(
-        CFG.HEADER_ROW,
-        1,
-        1,
-        lastColumn
-      )
-      .getDisplayValues()[0];
-
-  let statusColumn = -1;
-
-  for (let i = 0; i < headers.length; i++) {
-
-    if (
-      normalizeHeader_(headers[i]) ===
-      CFG.STATUS_HEADER
-    ) {
-
-      statusColumn = i + 1;
-      break;
-    }
-  }
-
-  if (statusColumn === -1) {
-    return;
-  }
-
-  const cell =
-    sheet.getRange(row, statusColumn);
-
-  const current =
-    String(
-      cell.getDisplayValue() || ''
-    ).trim();
-
-  if (current !== status) {
-    cell.setValue(status);
-  }
-}
-
-
-/* =========================
- * ERROR OBJECTS
- * ========================= */
-
-function addError_(errors, row, column, message) {
-  errors.push({
-    row: row,
-    column: column,
-    message: message
-  });
-}
-
-
-/* =========================
- * ERROR STORAGE
- * ========================= */
-
-function saveValidationResult_(
-  sheet,
-  errors
-) {
-
-  const props =
-    PropertiesService
-      .getUserProperties();
-
-  if (errors.length === 0) {
-
-    props.deleteProperty(
-      CFG.ERROR_PROPERTY
-    );
-
-    return;
-  }
-
-  props.setProperty(
-    CFG.ERROR_PROPERTY,
-    JSON.stringify({
-      timestamp: Date.now(),
-      sheet: sheet.getName(),
-      errors: errors
-    })
-  );
-}
-
-
-function runValidationNow() {
-  /*
-   * The HTML monitor actively refreshes validation instead of relying
-   * exclusively on the onEdit trigger. This makes the modeless monitor resilient
-   * to delayed/missed trigger executions and catches changes immediately.
-   */
-  const lock = LockService.getDocumentLock();
-
-  if (!lock.tryLock(1500)) {
-    return getValidationResult();
-  }
-
-  try {
-    refreshAllStatuses_();
-    return getValidationResult();
-  } catch (err) {
-    console.error('runValidationNow:', err);
-    return getValidationResult();
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-
-function getValidationResult() {
-
-  const value =
-    PropertiesService
-      .getUserProperties()
-      .getProperty(
-        CFG.ERROR_PROPERTY
-      );
-
-  if (!value) return null;
-
-  try {
-    return JSON.parse(value);
-  } catch (err) {
-    return null;
-  }
-}
-
-
-function clearValidationResult() {
-
-  PropertiesService
-    .getUserProperties()
-    .deleteProperty(
-      CFG.ERROR_PROPERTY
-    );
 
   return true;
 }
 
 
-function removeDuplicateErrors_(errors) {
+function textEquals_(
+  value,
+  expected
+) {
 
-  const seen = {};
-  const result = [];
+  if (!hasValue_(value)) {
+    return false;
+  }
 
-  errors.forEach(function(error) {
-
-    const key =
-      error.row +
-      '|' +
-      error.column +
-      '|' +
-      error.message;
-
-    if (!seen[key]) {
-
-      seen[key] = true;
-      result.push(error);
-    }
-  });
-
-  return result;
+  return String(value)
+    .trim()
+    .toLowerCase() ===
+    String(expected)
+      .trim()
+      .toLowerCase();
 }
 
 
-/* =========================
- * HTML MONITOR
- * ========================= */
+function displayValue_(
+  sheet,
+  row,
+  headers,
+  field
+) {
 
-function openValidationMonitor_() {
+  const index =
+    headers.indexOf(field);
 
-  const activeSheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-
-  if (!activeSheet || activeSheet.getName() !== CFG.TARGET_SHEET) {
-    return;
+  if (index < 0) {
+    return '';
   }
 
-  const html =
+  return sheet
+    .getRange(
+      row,
+      index + 1
+    )
+    .getDisplayValue();
+
+}
+
+
+/* ============================================================
+ * GET HEADERS
+ * ============================================================ */
+
+function getHeaders_(sheet) {
+
+  const lastColumn = sheet.getLastColumn();
+
+  if (lastColumn < 1) {
+    return [];
+  }
+
+  return sheet
+    .getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
+    .getDisplayValues()[0]
+    .map(header => normalizeText_(header));
+
+}
+
+
+/* ============================================================
+ * VALIDATE ONE ROW
+ * ============================================================ */
+
+function validateRow_(
+  sheet,
+  row,
+  headers,
+  status
+) {
+
+  const errors = [];
+
+  const rules = STATUS_RULES[status];
+
+  headers.forEach((header, index) => {
+
+    if (!header) {
+      return;
+    }
+
+    // STATUS itself is handled separately.
+    if (header === CONFIG.STATUS_HEADER) {
+      return;
+    }
+
+    const rule = rules[header];
+
+    /*
+     * If the workbook doesn't define a condition for a column,
+     * don't validate it.
+     */
+    if (!rule) {
+      return;
+    }
+
+    const column = index + 1;
+
+    const range = sheet.getRange(row, column);
+
+    const value = range.getValue();
+
+    const displayValue = normalizeText_(
+      range.getDisplayValue()
+    );
+
+    const fieldFormat = FIELD_FORMATS[header];
+
+    /*
+     * ----------------------------------------------------------
+     * REQUIRED
+     * ----------------------------------------------------------
+     */
+
+    if (rule === 'required') {
+
+      if (isBlankValue_(value, displayValue)) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'This field is required for status "' +
+            status +
+            '".'
+        });
+
+        return;
+      }
+
+      /*
+       * A required field must ALSO have the correct format.
+       */
+
+      const formatError = validateFormat_(
+        header,
+        value,
+        displayValue,
+        fieldFormat
+      );
+
+      if (formatError) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message: formatError
+        });
+
+      }
+
+      return;
+    }
+
+
+    /*
+     * ----------------------------------------------------------
+     * BLANK
+     * ----------------------------------------------------------
+     */
+
+    if (rule === 'blank') {
+
+      if (!isBlankValue_(value, displayValue)) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'This field must be blank for status "' +
+            status +
+            '".'
+        });
+
+      }
+
+      return;
+    }
+
+
+    /*
+     * ----------------------------------------------------------
+     * ZERO
+     * ----------------------------------------------------------
+     */
+
+    if (rule === 'zero') {
+
+      if (isBlankValue_(value, displayValue)) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'This field must contain 0 or 0.00 for status "' +
+            status +
+            '".'
+        });
+
+        return;
+      }
+
+      if (!isZero_(value, displayValue)) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'This field must be 0 or 0.00 for status "' +
+            status +
+            '".'
+        });
+
+      }
+
+      return;
+    }
+
+
+    /*
+     * ----------------------------------------------------------
+     * BEFORE TODAY
+     * ----------------------------------------------------------
+     */
+
+    if (rule === 'before') {
+
+      if (isBlankValue_(value, displayValue)) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'A date is required and it must be today or earlier.'
+        });
+
+        return;
+      }
+
+      const dateError = validateDate_(
+        value,
+        displayValue,
+        'before'
+      );
+
+      if (dateError) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message: dateError
+        });
+
+      }
+
+      return;
+    }
+
+
+    /*
+     * ----------------------------------------------------------
+     * AFTER TODAY
+     * ----------------------------------------------------------
+     */
+
+    if (rule === 'after') {
+
+      if (isBlankValue_(value, displayValue)) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'A date is required and it must be today or later.'
+        });
+
+        return;
+      }
+
+      const dateError = validateDate_(
+        value,
+        displayValue,
+        'after'
+      );
+
+      if (dateError) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message: dateError
+        });
+
+      }
+
+      return;
+    }
+
+
+    /*
+     * ----------------------------------------------------------
+     * EXACT TEXT
+     * ----------------------------------------------------------
+     */
+
+    if (rule.indexOf('exact:') === 0) {
+
+      const expected = rule.substring(6);
+
+      if (displayValue !== expected) {
+
+        errors.push({
+          row: row,
+          status: status,
+          field: header,
+          message:
+            'This field must contain exactly "' +
+            expected +
+            '".'
+        });
+
+      }
+
+      return;
+    }
+
+  });
+
+  return errors;
+}
+
+
+/* ============================================================
+ * FORMAT VALIDATION
+ * ============================================================ */
+
+function validateFormat_(
+  field,
+  value,
+  displayValue,
+  format
+) {
+
+  if (!format) {
+    return null;
+  }
+
+
+  /*
+   * NUMERIC
+   */
+
+  if (format === 'numeric') {
+
+    if (!isNumeric_(value, displayValue)) {
+
+      return (
+        'Invalid number format. This field must contain a numeric value.'
+      );
+
+    }
+
+    return null;
+  }
+
+
+  function isTextValue_(text) {
+
+  /*
+   * Accept ANY text content:
+   *
+   * Letters
+   * Numbers
+   * Symbols
+   * Special characters
+   * Spaces
+   * Punctuation
+   *
+   * Examples:
+   * ABC
+   * 12345
+   * PR-2026/001
+   * ABC #123 @ 50%
+   * Supplier & Trading Co., Ltd.
+   * ₱100,000.00
+   * TEST!!! @@@ ###
+   *
+   * The only invalid value is blank.
+   */
+
+  if (
+    text === null ||
+    text === undefined
+  ) {
+    return false;
+  }
+
+  return String(text).trim() !== '';
+}
+
+if (format === 'text') {
+
+  if (!isTextValue_(displayValue)) {
+
+    return (
+      'This field cannot be blank.'
+    );
+
+  }
+
+  return null;
+}
+  /*
+   * DATE
+   */
+
+  if (format === 'date') {
+
+    if (!isValidDateValue_(value, displayValue)) {
+
+      return (
+        'Invalid date format. Expected format: ' +
+        CONFIG.DATE_FORMAT +
+        '.'
+      );
+
+    }
+
+    return null;
+  }
+
+
+  return null;
+}
+
+
+/* ============================================================
+ * DATE VALIDATION
+ * ============================================================ */
+
+function validateDate_(
+  value,
+  displayValue,
+  direction
+) {
+
+  if (!isValidDateValue_(value, displayValue)) {
+
+    return (
+      'Invalid date format. Expected format: ' +
+      CONFIG.DATE_FORMAT +
+      '.'
+    );
+
+  }
+
+  const date = normalizeDate_(
+    value
+  );
+
+  if (!date) {
+
+    return (
+      'Invalid date. Expected format: ' +
+      CONFIG.DATE_FORMAT +
+      '.'
+    );
+
+  }
+
+  const today = normalizeDate_(
+    new Date()
+  );
+
+  const dateNumber = date.getTime();
+  const todayNumber = today.getTime();
+
+
+  if (
+    direction === 'before' &&
+    dateNumber > todayNumber
+  ) {
+
+    return (
+      'Invalid date. The date must be today or earlier.'
+    );
+
+  }
+
+
+  if (
+    direction === 'after' &&
+    dateNumber < todayNumber
+  ) {
+
+    return (
+      'Invalid date. The date must be today or later.'
+    );
+
+  }
+
+
+  return null;
+}
+
+
+/* ============================================================
+ * DATE TYPE CHECK
+ * ============================================================ */
+
+function isValidDateValue_(
+  value,
+  displayValue
+) {
+
+  /*
+   * Best case:
+   * Google Sheets stored the value as an actual Date object.
+   */
+
+  if (
+    Object.prototype.toString.call(value) ===
+    '[object Date]' &&
+    !isNaN(value.getTime())
+  ) {
+
+    return true;
+
+  }
+
+
+  /*
+   * If it is text, don't accept arbitrary JavaScript dates.
+   * Require the expected displayed pattern:
+   *
+   * January 5, 2026
+   * September 29, 2026
+   */
+
+  if (!displayValue) {
+    return false;
+  }
+
+  const datePattern =
+    /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}$/;
+
+  if (!datePattern.test(displayValue)) {
+    return false;
+  }
+
+  const parsed = new Date(displayValue);
+
+  return (
+    !isNaN(parsed.getTime())
+  );
+}
+
+
+/* ============================================================
+ * NORMALIZE DATE
+ * ============================================================ */
+
+function normalizeDate_(dateValue) {
+
+  const date = new Date(dateValue);
+
+  if (isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  );
+}
+
+
+/* ============================================================
+ * NUMERIC CHECK
+ * ============================================================ */
+
+function isNumeric_(
+  value,
+  displayValue
+) {
+
+  /*
+   * Actual Google Sheets number.
+   */
+
+  if (
+    typeof value === 'number' &&
+    !isNaN(value)
+  ) {
+
+    return true;
+
+  }
+
+
+  /*
+   * Numeric text.
+   *
+   * Supports:
+   * 100
+   * 100.00
+   * 1,000
+   * 1,000.00
+   */
+
+  if (!displayValue) {
+    return false;
+  }
+
+  const cleaned = displayValue
+    .replace(/,/g, '')
+    .replace(/\s/g, '');
+
+  return /^-?\d+(\.\d+)?$/.test(cleaned);
+}
+
+
+/* ============================================================
+ * ZERO CHECK
+ * ============================================================ */
+
+function isZero_(
+  value,
+  displayValue
+) {
+
+  if (
+    typeof value === 'number' &&
+    !isNaN(value)
+  ) {
+
+    return value === 0;
+
+  }
+
+  if (!displayValue) {
+    return false;
+  }
+
+  const cleaned = displayValue
+    .replace(/,/g, '')
+    .replace(/\s/g, '');
+
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) {
+    return false;
+  }
+
+  return Number(cleaned) === 0;
+}
+
+
+/* ============================================================
+ * ALPHANUMERIC CHECK
+ *
+ * Spaces and common punctuation are allowed because fields
+ * such as PROJECT TITLE and SUPPLIER naturally contain spaces.
+ * ============================================================ */
+
+function isAlphanumeric_(text) {
+
+  if (!text) {
+    return false;
+  }
+
+  /*
+   * Reject values containing characters that are clearly not
+   * part of an ordinary alphanumeric entry.
+   *
+   * Letters, numbers, spaces and common procurement reference
+   * punctuation are allowed.
+   */
+
+  return /^[A-Za-z0-9\s._\/\-()&,#]+$/.test(text);
+}
+
+
+/* ============================================================
+ * BLANK CHECK
+ * ============================================================ */
+
+function isBlankValue_(
+  value,
+  displayValue
+) {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+
+    return true;
+
+  }
+
+  if (
+    typeof value === 'string' &&
+    value.trim() === ''
+  ) {
+
+    return true;
+
+  }
+
+  if (
+    typeof displayValue === 'string' &&
+    displayValue.trim() === ''
+  ) {
+
+    return true;
+
+  }
+
+  return false;
+}
+
+
+/* ============================================================
+ * NORMALIZE TEXT
+ * ============================================================ */
+
+function normalizeText_(value) {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+
+    return '';
+
+  }
+
+  return String(value).trim();
+
+}
+
+
+/* ============================================================
+ * HTML MODAL
+ * ============================================================ */
+
+function showValidationModal_(
+  errors
+) {
+
+  /*
+   * Prevent an enormous dialog.
+   */
+
+  const displayErrors =
+    errors.slice(
+      0,
+      CONFIG.MAX_ERRORS_DISPLAYED
+    );
+
+  let html =
+    '<!DOCTYPE html>' +
+    '<html>' +
+    '<head>' +
+    '<base target="_top">' +
+    '<style>' +
+
+    '* {' +
+    '  box-sizing: border-box;' +
+    '}' +
+
+    'body {' +
+    '  margin: 0;' +
+    '  padding: 0;' +
+    '  font-family: Arial, sans-serif;' +
+    '  background: #f5f7fa;' +
+    '  color: #202124;' +
+    '}' +
+
+    '.container {' +
+    '  padding: 22px;' +
+    '}' +
+
+    '.header {' +
+    '  background: #b3261e;' +
+    '  color: white;' +
+    '  margin: -22px -22px 20px -22px;' +
+    '  padding: 18px 22px;' +
+    '}' +
+
+    '.header h2 {' +
+    '  margin: 0 0 6px 0;' +
+    '  font-size: 21px;' +
+    '}' +
+
+    '.header p {' +
+    '  margin: 0;' +
+    '  font-size: 13px;' +
+    '  opacity: .95;' +
+    '}' +
+
+    '.summary {' +
+    '  background: white;' +
+    '  border-left: 5px solid #b3261e;' +
+    '  padding: 13px 15px;' +
+    '  margin-bottom: 16px;' +
+    '  border-radius: 5px;' +
+    '  box-shadow: 0 1px 3px rgba(0,0,0,.10);' +
+    '}' +
+
+    '.summary strong {' +
+    '  font-size: 16px;' +
+    '}' +
+
+    '.error {' +
+    '  background: white;' +
+    '  margin-bottom: 10px;' +
+    '  padding: 13px 15px;' +
+    '  border-radius: 5px;' +
+    '  border: 1px solid #dadce0;' +
+    '}' +
+
+    '.error-title {' +
+    '  font-weight: bold;' +
+    '  margin-bottom: 5px;' +
+    '  color: #b3261e;' +
+    '}' +
+
+    '.error-message {' +
+    '  font-size: 13px;' +
+    '  line-height: 1.45;' +
+    '}' +
+
+    '.details {' +
+    '  color: #5f6368;' +
+    '  font-size: 12px;' +
+    '  margin-bottom: 5px;' +
+    '}' +
+
+    '.footer {' +
+    '  margin-top: 18px;' +
+    '  text-align: right;' +
+    '}' +
+
+    'button {' +
+    '  border: none;' +
+    '  border-radius: 5px;' +
+    '  padding: 10px 22px;' +
+    '  background: #1a73e8;' +
+    '  color: white;' +
+    '  font-size: 14px;' +
+    '  cursor: pointer;' +
+    '}' +
+
+    'button:hover {' +
+    '  background: #1557b0;' +
+    '}' +
+
+    '.scroll {' +
+    '  max-height: 390px;' +
+    '  overflow-y: auto;' +
+    '  padding-right: 4px;' +
+    '}' +
+
+    '</style>' +
+    '</head>' +
+
+    '<body>' +
+
+    '<div class="container">' +
+
+    '<div class="header">' +
+    '<h2>⚠ Procurement Data Validation Error</h2>' +
+    '<p>Please correct the following field(s).</p>' +
+    '</div>' +
+
+    '<div class="summary">' +
+    '<strong>' +
+    escapeHtml_(
+      errors.length +
+      ' validation error' +
+      (errors.length === 1 ? '' : 's') +
+      ' found'
+    ) +
+    '</strong>' +
+    '</div>' +
+
+    '<div class="scroll">';
+
+
+  displayErrors.forEach(
+    function(error) {
+
+      html +=
+        '<div class="error">' +
+
+        '<div class="details">' +
+        'Row ' +
+        escapeHtml_(
+          error.row
+        ) +
+        ' &nbsp; | &nbsp; Status: ' +
+        escapeHtml_(
+          error.status
+        ) +
+        '</div>' +
+
+        '<div class="error-title">' +
+        escapeHtml_(
+          error.field
+        ) +
+        '</div>' +
+
+        '<div class="error-message">' +
+        escapeHtml_(
+          error.message
+        ) +
+        '</div>' +
+
+        '</div>';
+
+    }
+  );
+
+
+  if (
+    errors.length >
+    CONFIG.MAX_ERRORS_DISPLAYED
+  ) {
+
+    html +=
+      '<div class="error">' +
+      '<div class="error-message">' +
+      'Only the first ' +
+      CONFIG.MAX_ERRORS_DISPLAYED +
+      ' errors are displayed.' +
+      '</div>' +
+      '</div>';
+
+  }
+
+
+  html +=
+    '</div>' +
+
+    '<div class="footer">' +
+    '<button onclick="google.script.host.close()">' +
+    'Close' +
+    '</button>' +
+    '</div>' +
+
+    '</div>' +
+
+    '</body>' +
+    '</html>';
+
+
+  const output =
     HtmlService
-      .createHtmlOutput(
-        getValidationMonitorHtml_()
-      )
-      .setWidth(720)
-      .setHeight(540);
+      .createHtmlOutput(html)
+      .setWidth(650)
+      .setHeight(560);
+
 
   SpreadsheetApp
     .getUi()
-    .showModelessDialog(
-      html,
-      'Procurement Data Validation'
+    .showModalDialog(
+      output,
+      'Data Validation'
     );
 }
 
 
-function getValidationMonitorHtml_() {
-
-  return `
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  font-family: Arial, sans-serif;
-  background: #f5f6f8;
-  color: #202124;
-}
-
-.container {
-  padding: 22px;
-}
-
-.header {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  margin-bottom: 16px;
-}
-
-.icon {
-  width: 45px;
-  height: 45px;
-  border-radius: 50%;
-  background: #f4b400;
-  color: white;
-  font-size: 26px;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.title {
-  font-size: 20px;
-  font-weight: bold;
-}
-
-.subtitle {
-  font-size: 12px;
-  color: #666;
-  margin-top: 3px;
-}
-
-.status {
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 7px;
-  padding: 11px 14px;
-  margin-bottom: 12px;
-}
-
-.status.good {
-  color: #188038;
-}
-
-.status.bad {
-  color: #b31412;
-}
-
-.info {
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 11px 14px;
-  margin-bottom: 12px;
-}
-
-.error-list {
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  max-height: 315px;
-  overflow-y: auto;
-}
-
-.error {
-  padding: 13px 15px;
-  border-bottom: 1px solid #eee;
-}
-
-.error:last-child {
-  border-bottom: none;
-}
-
-.location {
-  font-weight: bold;
-  margin-bottom: 5px;
-}
-
-.column {
-  color: #b31412;
-}
-
-.message {
-  color: #555;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.empty {
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  text-align: center;
-  padding: 50px 20px;
-  color: #777;
-}
-
-.footer {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 15px;
-}
-
-button {
-  border: none;
-  border-radius: 6px;
-  padding: 10px 20px;
-  cursor: pointer;
-  font-weight: bold;
-  font-size: 14px;
-  background: #1a73e8;
-  color: white;
-}
-
-</style>
-</head>
-
-<body>
-
-<div class="container">
-
-  <div class="header">
-
-    <div class="icon">!</div>
-
-    <div>
-      <div class="title">
-        Procurement Data Validation
-      </div>
-
-      <div class="subtitle">
-        Automatic validation monitor — keep editing the sheet — keep editing the sheet
-      </div>
-    </div>
-
-  </div>
-
-  <div id="status"
-       class="status good">
-    Monitoring spreadsheet changes...
-  </div>
-
-  <div id="content">
-    <div class="empty">
-      No validation errors.
-    </div>
-  </div>
-
-  <div class="footer">
-    <button onclick="google.script.host.close()">
-      Close
-    </button>
-  </div>
-
-</div>
-
-<script>
-
-let lastTimestamp = 0;
-let validationBusy = false;
-
-function checkValidation() {
-
-  if (validationBusy) return;
-  validationBusy = true;
-
-  google.script.run
-
-    .withSuccessHandler(function(result) {
-
-      validationBusy = false;
-
-      if (!result) {
-        showNoErrors();
-        return;
-      }
-
-      lastTimestamp =
-        result.timestamp || Date.now();
-
-      showErrors(result);
-
-    })
-
-    .withFailureHandler(function(error) {
-
-      validationBusy = false;
-
-      const status =
-        document.getElementById('status');
-
-      status.className =
-        'status bad';
-
-      status.textContent =
-        'Validation monitor error.';
-
-      console.error(error);
-
-    })
-
-    .runValidationNow();
-}
-
-
-function showErrors(result) {
-
-  const status =
-    document.getElementById('status');
-
-  status.className =
-    'status bad';
-
-  status.innerHTML =
-    '<strong>' +
-    result.errors.length +
-    '</strong> validation error(s) found.';
-
-  let html =
-
-    '<div class="info">' +
-      '<strong>Sheet:</strong> ' +
-      escapeHtml(result.sheet) +
-    '</div>' +
-
-    '<div class="error-list">';
-
-  result.errors.forEach(function(error) {
-
-    html +=
-
-      '<div class="error">' +
-
-        '<div class="location">' +
-          'Row ' +
-          escapeHtml(error.row) +
-          ' — ' +
-          '<span class="column">' +
-            escapeHtml(error.column) +
-          '</span>' +
-        '</div>' +
-
-        '<div class="message">' +
-          escapeHtml(error.message) +
-        '</div>' +
-
-      '</div>';
-
-  });
-
-  html += '</div>';
-
-  document.getElementById('content')
-    .innerHTML = html;
-}
-
-
-function showNoErrors() {
-
-  const status =
-    document.getElementById('status');
-
-  status.className =
-    'status good';
-
-  status.innerHTML =
-    '<strong>✓</strong> No validation errors.';
-
-  document.getElementById('content')
-    .innerHTML =
-      '<div class="empty">' +
-        'All current entries meet the ' +
-        'validation rules.' +
-      '</div>';
-}
-
-
-function escapeHtml(value) {
+/* ============================================================
+ * HTML ESCAPE
+ * ============================================================ */
+
+function escapeHtml_(value) {
 
   return String(value)
     .replace(/&/g, '&amp;')
@@ -1838,19 +1903,88 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+
 }
 
 
-checkValidation();
+/* ============================================================
+ * OPTIONAL MANUAL VALIDATION
+ *
+ * This function is useful for testing.
+ *
+ * It validates the currently active row on Data List.
+ * ============================================================ */
 
-setInterval(
-  checkValidation,
-  600
-);
+function validateActiveRow() {
 
-</script>
+  const sheet =
+    SpreadsheetApp
+      .getActiveSpreadsheet()
+      .getActiveSheet();
 
-</body>
-</html>
-`;
+  if (
+    sheet.getName() !==
+    CONFIG.SHEET_NAME
+  ) {
+
+    SpreadsheetApp
+      .getUi()
+      .alert(
+        'This validator only runs on the "Data List" sheet.'
+      );
+
+    return;
+  }
+
+  const headers =
+    getHeaders_(sheet);
+
+  const statusColumn =
+    headers.indexOf(
+      CONFIG.STATUS_HEADER
+    ) + 1;
+
+  if (statusColumn <= 0) {
+    return;
+  }
+
+  const row =
+    sheet
+      .getActiveRange()
+      .getRow();
+
+  if (row <= CONFIG.HEADER_ROW) {
+    return;
+  }
+
+  const status =
+    normalizeText_(
+      sheet
+        .getRange(row, statusColumn)
+        .getDisplayValue()
+    );
+
+  if (!status) {
+    return;
+  }
+
+  const errors =
+    validateRow_(
+      sheet,
+      row,
+      headers,
+      status
+    );
+
+  if (errors.length > 0) {
+    showValidationModal_(errors);
+  } else {
+    SpreadsheetApp
+      .getActive()
+      .toast(
+        'No validation errors found.',
+        'Validation',
+        3
+      );
+  }
 }
