@@ -410,9 +410,31 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  // Status changes and validation are handled by the installable
-  // validatorOnEdit trigger. Keeping this simple trigger empty avoids
-  // race conditions between two edit handlers.
+  // Direct edit-time status engine. This runs automatically whenever
+  // a user edits the Data List sheet and does not depend on setupValidator()
+  // being re-run after code changes.
+  try {
+    if (!e || !e.range) return;
+
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+    if (e.range.getRow() <= CONFIG.HEADER_ROW) return;
+
+    const headers = getHeaders_(sheet);
+    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+    if (statusColumn <= 0) return;
+
+    const firstRow = e.range.getRow();
+    const lastRow = firstRow + e.range.getNumRows() - 1;
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      updateRowStatus_(sheet, row, headers, statusColumn);
+    }
+
+    SpreadsheetApp.flush();
+  } catch (error) {
+    console.error('onEdit status engine error:', error);
+  }
 }
 
 
