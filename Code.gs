@@ -335,72 +335,119 @@ const FIELD_FORMATS = {
 
 function setupValidator() {
 
-  const ss =
-    SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('No active spreadsheet found.');
 
-  // Remove duplicate validator triggers.
-  const triggers =
-    ScriptApp.getProjectTriggers();
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  if (!sheet) {
+    throw new Error('Sheet "' + CONFIG.SHEET_NAME + '" was not found.');
+  }
 
-  triggers.forEach(
-    trigger => {
-
-      const handler =
-        trigger.getHandlerFunction();
-
-      if (
-        handler === 'validatorOnEdit' ||
-        handler === 'validatorOnOpen'
-      ) {
-
-        ScriptApp.deleteTrigger(
-          trigger
-        );
-
-      }
-
+  // Remove only triggers created by this validator.
+  ScriptApp.getProjectTriggers().forEach(trigger => {
+    const handler = trigger.getHandlerFunction();
+    if (
+      handler === 'validatorOnEdit' ||
+      handler === 'validatorOnOpen' ||
+      handler === 'validatorOnChange'
+    ) {
+      ScriptApp.deleteTrigger(trigger);
     }
-  );
+  });
 
-  // Recalculate whenever data is edited.
-  ScriptApp.newTrigger(
-    'validatorOnEdit'
-  )
+  // Status calculation is handled by the simple onEdit/onOpen functions.
+  // The installable edit trigger is used only for the HTML validation dialog.
+  ScriptApp.newTrigger('validatorOnEdit')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
-  // Recalculate whenever the spreadsheet is opened.
-  ScriptApp.newTrigger(
-    'validatorOnOpen'
-  )
+  ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
     .create();
 
-  const sheet =
-    ss.getSheetByName(
-      CONFIG.SHEET_NAME
-    );
-
-  if (!sheet) {
-
-    throw new Error(
-      'Sheet "' +
-      CONFIG.SHEET_NAME +
-      '" was not found.'
-    );
-
-  }
-
-  // Perform an immediate refresh as part of setup.
+  // Refresh immediately.
   refreshAllStatuses_(sheet);
 
-  SpreadsheetApp.getActive().toast(
-    'Procurement validator installed successfully. Statuses will refresh on edit and on open.',
+  SpreadsheetApp.flush();
+
+  ss.toast(
+    'Validator installed. Status calculation is now independent from the validation modal.',
     'Validator',
     5
   );
+}
+
+
+/* ============================================================
+ * SIMPLE ON EDIT - STATUS ENGINE
+ *
+ * This function deliberately contains NO modal/UI logic.
+ * It is responsible only for changing STATUS.
+ * ============================================================ */
+
+function onEdit(e) {
+  try {
+    if (!e || !e.range) return;
+
+    const sheet = e.range.getSheet();
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+
+    const firstRow = Math.max(e.range.getRow(), CONFIG.HEADER_ROW + 1);
+    const lastRow = e.range.getRow() + e.range.getNumRows() - 1;
+
+    const headers = getHeaders_(sheet);
+    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+    if (statusColumn <= 0) return;
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      updateRowStatus_(sheet, row, headers, statusColumn);
+    }
+
+    SpreadsheetApp.flush();
+
+  } catch (error) {
+    console.error('onEdit status engine error:', error);
+  }
+}
+
+
+/* ============================================================
+ * SIMPLE ON OPEN - STATUS ENGINE
+ * ============================================================ */
+
+function onOpen(e) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+    if (!sheet) return;
+
+    refreshAllStatuses_(sheet);
+    SpreadsheetApp.flush();
+
+  } catch (error) {
+    console.error('onOpen status engine error:', error);
+  }
+}
+
+
+/* ============================================================
+ * STATUS UPDATE FOR ONE ROW
+ * ============================================================ */
+
+function updateRowStatus_(sheet, row, headers, statusColumn) {
+  if (row <= CONFIG.HEADER_ROW) return;
+
+  const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
+  if (!automaticStatus) return;
+
+  const statusCell = sheet.getRange(row, statusColumn);
+  const currentStatus = normalizeText_(statusCell.getDisplayValue());
+
+  if (currentStatus !== automaticStatus) {
+    statusCell.setValue(automaticStatus);
+  }
 }
 
 
@@ -409,28 +456,13 @@ function setupValidator() {
  * ============================================================ */
 
 function validatorOnOpen(e) {
-
   try {
-
-    const ss =
-      SpreadsheetApp.getActiveSpreadsheet();
-
-    const sheet =
-      ss.getSheetByName(
-        CONFIG.SHEET_NAME
-      );
-
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
     if (!sheet) return;
-
     refreshAllStatuses_(sheet);
-
   } catch (error) {
-
-    console.error(
-      'validatorOnOpen error:',
-      error
-    );
-
+    console.error('validatorOnOpen error:', error);
   }
 }
 
@@ -442,68 +474,18 @@ function validatorOnOpen(e) {
  * today's date has changed, even when nobody edited the row.
  */
 function refreshAllStatuses_(sheet) {
+  if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
 
-  if (!sheet) return;
-
-  const headers =
-    getHeaders_(sheet);
-
-  const statusColumn =
-    headers.indexOf(
-      CONFIG.STATUS_HEADER
-    ) + 1;
-
+  const headers = getHeaders_(sheet);
+  const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
   if (statusColumn <= 0) return;
 
-  const lastRow =
-    sheet.getLastRow();
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= CONFIG.HEADER_ROW) return;
 
-  if (
-    lastRow <= CONFIG.HEADER_ROW
-  ) {
-    return;
+  for (let row = CONFIG.HEADER_ROW + 1; row <= lastRow; row++) {
+    updateRowStatus_(sheet, row, headers, statusColumn);
   }
-
-  for (
-    let row = CONFIG.HEADER_ROW + 1;
-    row <= lastRow;
-    row++
-  ) {
-
-    const automaticStatus =
-      determineAutomaticStatus_(
-        sheet,
-        row,
-        headers
-      );
-
-    if (automaticStatus) {
-
-      const cell =
-        sheet.getRange(
-          row,
-          statusColumn
-        );
-
-      const current =
-        normalizeText_(
-          cell.getDisplayValue()
-        );
-
-      if (
-        current !== automaticStatus
-      ) {
-
-        cell.setValue(
-          automaticStatus
-        );
-
-      }
-
-    }
-
-  }
-
 }
 
 
@@ -547,46 +529,6 @@ function validatorOnEdit(e) {
       row <= lastRow;
       row++
     ) {
-
-      /*
-       * ------------------------------------------------------
-       * 1. AUTOMATICALLY DETERMINE STATUS
-       * ------------------------------------------------------
-       */
-      const automaticStatus =
-        determineAutomaticStatus_(
-          sheet,
-          row,
-          headers
-        );
-
-      /*
-       * Write the automatically determined status.
-       *
-       * We only write when a status can actually be determined.
-       */
-      if (automaticStatus) {
-
-        const statusCell =
-          sheet.getRange(
-            row,
-            statusColumn
-          );
-
-        const currentStatus =
-          normalizeText_(
-            statusCell.getDisplayValue()
-          );
-
-        if (currentStatus !== automaticStatus) {
-
-          statusCell.setValue(
-            automaticStatus
-          );
-
-        }
-
-      }
 
       /*
        * ------------------------------------------------------
