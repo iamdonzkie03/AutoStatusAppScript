@@ -322,6 +322,28 @@ const FIELD_FORMATS = {
   'REMARKS': 'text'
 };
 
+const NA_ALLOWED_FIELDS = new Set([
+  'PRE-PROCUREMENT CONFERENCE',
+  'POSTING DATE',
+  'PRE-BID CONFERENCE',
+  'ELIGIBILITY SCREENING',
+  'SUBMISSION OF BIDS',
+  'DETAILED BID EVALUATION',
+  'POST-QUALIFICATION'
+]);
+
+function isNAValue_(value, displayValue) {
+  const text = normalizeText_(
+    displayValue !== undefined ? displayValue : value
+  ).toUpperCase();
+
+  return text === 'NA' || text === 'N/A';
+}
+
+function isAcceptedValue_(field, value, displayValue) {
+  return NA_ALLOWED_FIELDS.has(field) && isNAValue_(value, displayValue);
+}
+
 
 /* ============================================================
  * INSTALLATION
@@ -530,56 +552,35 @@ function validatorOnEdit(e) {
       row++
     ) {
 
-      /*
-       * ------------------------------------------------------
-       * 2. GET THE RESULTING STATUS
-       * ------------------------------------------------------
-       */
-      const status =
-        normalizeText_(
-          sheet
-            .getRange(
-              row,
-              statusColumn
-            )
-            .getDisplayValue()
-        );
+      const statusCell = sheet.getRange(row, statusColumn);
+      const oldStatus = normalizeText_(statusCell.getDisplayValue());
 
-      /*
-       * Nothing to validate until a status has been determined.
-       */
-      if (!status) continue;
+      // Calculate the status AFTER the user's edit.
+      const automaticStatus = determineAutomaticStatus_(
+        sheet,
+        row,
+        headers
+      );
 
-      /*
-       * ------------------------------------------------------
-       * 3. VALIDATE THE ROW
-       * ------------------------------------------------------
-       */
-      if (!STATUS_RULES[status]) {
+      // If no complete status can be determined, do not show a modal.
+      if (!automaticStatus) continue;
 
-        allErrors.push({
-          row: row,
-          status: status,
-          field: 'STATUS',
-          message:
-            'Invalid automatically determined status.'
-        });
+      // Only validate/show the modal when the status actually changed.
+      if (oldStatus === automaticStatus) continue;
 
-        continue;
-      }
+      statusCell.setValue(automaticStatus);
+      SpreadsheetApp.flush();
 
-      const rowErrors =
-        validateRow_(
-          sheet,
-          row,
-          headers,
-          status
-        );
+      const rowErrors = validateRow_(
+        sheet,
+        row,
+        headers,
+        automaticStatus
+      );
 
       rowErrors.forEach(
         error => allErrors.push(error)
       );
-
     }
 
     /*
@@ -653,19 +654,19 @@ function determineAutomaticStatus_(
   const today = normalizeDate_(new Date());
 
   const postingDate =
-    normalizeDate_(
-      data['POSTING DATE']
-    );
+    isNAValue_('', data['POSTING DATE'])
+      ? null
+      : normalizeDate_(data['POSTING DATE']);
 
   const eligibilityDate =
-    normalizeDate_(
-      data['ELIGIBILITY SCREENING']
-    );
+    isNAValue_('', data['ELIGIBILITY SCREENING'])
+      ? null
+      : normalizeDate_(data['ELIGIBILITY SCREENING']);
 
   const submissionDate =
-    normalizeDate_(
-      data['SUBMISSION OF BIDS']
-    );
+    isNAValue_('', data['SUBMISSION OF BIDS'])
+      ? null
+      : normalizeDate_(data['SUBMISSION OF BIDS']);
 
   const postingIsBeforeOrToday =
     postingDate &&
@@ -1148,6 +1149,10 @@ function validateRow_(
 
     if (rule === 'required') {
 
+      if (isAcceptedValue_(header, value, displayValue)) {
+        return;
+      }
+
       if (isBlankValue_(value, displayValue)) {
 
         errors.push({
@@ -1264,6 +1269,10 @@ function validateRow_(
 
     if (rule === 'before') {
 
+      if (isAcceptedValue_(header, value, displayValue)) {
+        return;
+      }
+
       if (isBlankValue_(value, displayValue)) {
 
         errors.push({
@@ -1305,6 +1314,10 @@ function validateRow_(
      */
 
     if (rule === 'after') {
+
+      if (isAcceptedValue_(header, value, displayValue)) {
+        return;
+      }
 
       if (isBlankValue_(value, displayValue)) {
 
