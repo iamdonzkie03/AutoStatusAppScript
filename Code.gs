@@ -99,12 +99,12 @@ const STATUS_RULES = {
     'PR NO.': 'required',
     'PR TOTAL ABC': 'required',
     'PRE-PROCUREMENT CONFERENCE': 'required',
-    'POSTING DATE': 'after',
+    'POSTING DATE': 'required',
     'PHILGEPS REFERENCE NO.': 'required',
     'PROJECT ID': 'required',
     'PRE-BID CONFERENCE': 'required',
-    'ELIGIBILITY SCREENING': 'required',
-    'SUBMISSION OF BIDS': 'required',
+    'ELIGIBILITY SCREENING': 'after',
+    'SUBMISSION OF BIDS': 'after',
     'DETAILED BID EVALUATION': 'blank',
     'POST-QUALIFICATION': 'blank',
     'NOA DATE': 'blank',
@@ -124,12 +124,12 @@ const STATUS_RULES = {
     'PR NO.': 'required',
     'PR TOTAL ABC': 'required',
     'PRE-PROCUREMENT CONFERENCE': 'required',
-    'POSTING DATE': 'after',
+    'POSTING DATE': 'required',
     'PHILGEPS REFERENCE NO.': 'required',
     'PROJECT ID': 'required',
     'PRE-BID CONFERENCE': 'required',
-    'ELIGIBILITY SCREENING': 'required',
-    'SUBMISSION OF BIDS': 'required',
+    'ELIGIBILITY SCREENING': 'after',
+    'SUBMISSION OF BIDS': 'after',
     'DETAILED BID EVALUATION': 'blank',
     'POST-QUALIFICATION': 'blank',
     'NOA DATE': 'blank',
@@ -149,12 +149,12 @@ const STATUS_RULES = {
     'PR NO.': 'required',
     'PR TOTAL ABC': 'required',
     'PRE-PROCUREMENT CONFERENCE': 'required',
-    'POSTING DATE': 'after',
+    'POSTING DATE': 'required',
     'PHILGEPS REFERENCE NO.': 'required',
     'PROJECT ID': 'required',
     'PRE-BID CONFERENCE': 'required',
-    'ELIGIBILITY SCREENING': 'required',
-    'SUBMISSION OF BIDS': 'required',
+    'ELIGIBILITY SCREENING': 'after',
+    'SUBMISSION OF BIDS': 'after',
     'DETAILED BID EVALUATION': 'required',
     'POST-QUALIFICATION': 'required',
     'NOA DATE': 'required',
@@ -174,12 +174,12 @@ const STATUS_RULES = {
     'PR NO.': 'required',
     'PR TOTAL ABC': 'required',
     'PRE-PROCUREMENT CONFERENCE': 'required',
-    'POSTING DATE': 'after',
+    'POSTING DATE': 'required',
     'PHILGEPS REFERENCE NO.': 'required',
     'PROJECT ID': 'required',
     'PRE-BID CONFERENCE': 'required',
-    'ELIGIBILITY SCREENING': 'required',
-    'SUBMISSION OF BIDS': 'required',
+    'ELIGIBILITY SCREENING': 'after',
+    'SUBMISSION OF BIDS': 'after',
     'DETAILED BID EVALUATION': 'required',
     'POST-QUALIFICATION': 'required',
     'NOA DATE': 'required',
@@ -560,6 +560,56 @@ function determineAutomaticStatus_(
 
   /*
    * ----------------------------------------------------------
+   * DATE-BASED STATUS TRANSITION
+   * ----------------------------------------------------------
+   *
+   * Active:
+   *   POSTING DATE is today or earlier.
+   *
+   * Closed / Failed / Awarded / Purchase Order:
+   *   ELIGIBILITY SCREENING AND SUBMISSION OF BIDS
+   *   are both after today.
+   *
+   * The more specific statuses are checked first so that
+   * completed procurement stages are not overwritten by Closed.
+   */
+
+  const today = normalizeDate_(new Date());
+
+  const postingDate =
+    normalizeDate_(
+      data['POSTING DATE']
+    );
+
+  const eligibilityDate =
+    normalizeDate_(
+      data['ELIGIBILITY SCREENING']
+    );
+
+  const submissionDate =
+    normalizeDate_(
+      data['SUBMISSION OF BIDS']
+    );
+
+  const postingIsBeforeOrToday =
+    postingDate &&
+    postingDate.getTime() <= today.getTime();
+
+  const eligibilityIsAfterToday =
+    eligibilityDate &&
+    eligibilityDate.getTime() > today.getTime();
+
+  const submissionIsAfterToday =
+    submissionDate &&
+    submissionDate.getTime() > today.getTime();
+
+  const futureEligibilityAndBids =
+    eligibilityIsAfterToday &&
+    submissionIsAfterToday;
+
+
+  /*
+   * ----------------------------------------------------------
    * CANCELLED PR
    * ----------------------------------------------------------
    */
@@ -568,24 +618,20 @@ function determineAutomaticStatus_(
     textEquals_(
       data['REMARKS'],
       'Cancelled PR'
+    ) &&
+    isZero_(
+      data['PR TOTAL ABC'],
+      displayValue_(
+        sheet,
+        row,
+        headers,
+        'PR TOTAL ABC'
+      )
     )
   ) {
 
-    if (
-      isZero_(
-        data['PR TOTAL ABC'],
-        displayValue_(
-          sheet,
-          row,
-          headers,
-          'PR TOTAL ABC'
-        )
-      )
-    ) {
+    return 'Cancelled PR';
 
-      return 'Cancelled PR';
-
-    }
   }
 
 
@@ -599,30 +645,13 @@ function determineAutomaticStatus_(
     textEquals_(
       data['REMARKS'],
       'Cancelled PO'
-    )
+    ) &&
+    hasValue_(data['PO NO.']) &&
+    !hasValue_(data['PO TOTAL COST'])
   ) {
 
-    if (
-      hasValue_(data['PO NO.']) === false &&
-      hasValue_(data['PO TOTAL COST']) === false
-    ) {
+    return 'Cancelled PO';
 
-      return null;
-
-    }
-
-    /*
-     * Cancelled PO requires the PO number to exist,
-     * while PO TOTAL COST must be blank.
-     */
-    if (
-      hasValue_(data['PO NO.']) &&
-      !hasValue_(data['PO TOTAL COST'])
-    ) {
-
-      return 'Cancelled PO';
-
-    }
   }
 
 
@@ -642,7 +671,6 @@ function determineAutomaticStatus_(
         'TOTAL ABC'
       )
     ) &&
-
     isZero_(
       data['PR TOTAL ABC'],
       displayValue_(
@@ -652,7 +680,6 @@ function determineAutomaticStatus_(
         'PR TOTAL ABC'
       )
     ) &&
-
     hasValue_(data['PR NO.'])
   ) {
 
@@ -693,29 +720,27 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    * PURCHASE ORDER
    * ----------------------------------------------------------
+   *
+   * Requires the future-date transition AND all PO fields.
    */
 
   if (
+    futureEligibilityAndBids &&
     hasValue_(
       data['DATE PREPARED (PO)']
     ) &&
-
     hasValue_(
       data['PO NO.']
     ) &&
-
     hasValue_(
       data['PO TOTAL COST']
     ) &&
-
     hasValue_(
       data['SUPPLIER']
     ) &&
-
     hasValue_(
       data['NOA DATE']
     ) &&
-
     hasValue_(
       data['NTP DATE']
     )
@@ -730,43 +755,45 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    * AWARDED
    * ----------------------------------------------------------
+   *
+   * Requires the future-date transition, award fields, and
+   * PO TOTAL COST = 0.
    */
 
   if (
+    futureEligibilityAndBids &&
     hasValue_(
       data['DETAILED BID EVALUATION']
     ) &&
-
     hasValue_(
       data['POST-QUALIFICATION']
     ) &&
-
     hasValue_(
       data['NOA DATE']
     ) &&
-
     hasValue_(
       data['NTP DATE']
     ) &&
-
     hasValue_(
       data['BAC RESOLUTION NO.']
     ) &&
-
     hasValue_(
       data['SUPPLIER']
     ) &&
-
     !hasValue_(
       data['DATE PREPARED (PO)']
     ) &&
-
     !hasValue_(
       data['PO NO.']
     ) &&
-
-    !hasValue_(
-      data['PO TOTAL COST']
+    isZero_(
+      data['PO TOTAL COST'],
+      displayValue_(
+        sheet,
+        row,
+        headers,
+        'PO TOTAL COST'
+      )
     )
   ) {
 
@@ -779,31 +806,39 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    * FAILED
    * ----------------------------------------------------------
+   *
+   * Requires the future-date transition, BAC resolution,
+   * no supplier/award dates, and PO TOTAL COST = 0.
    */
 
   if (
+    futureEligibilityAndBids &&
     hasValue_(
       data['BAC RESOLUTION NO.']
     ) &&
-
     !hasValue_(
       data['SUPPLIER']
     ) &&
-
     !hasValue_(
       data['DETAILED BID EVALUATION']
     ) &&
-
     !hasValue_(
       data['POST-QUALIFICATION']
     ) &&
-
     !hasValue_(
       data['NOA DATE']
     ) &&
-
     !hasValue_(
       data['NTP DATE']
+    ) &&
+    isZero_(
+      data['PO TOTAL COST'],
+      displayValue_(
+        sheet,
+        row,
+        headers,
+        'PO TOTAL COST'
+      )
     )
   ) {
 
@@ -814,14 +849,15 @@ function determineAutomaticStatus_(
 
   /*
    * ----------------------------------------------------------
-   * ACTIVE / CLOSED
+   * CLOSED
    * ----------------------------------------------------------
    *
-   * Both have the same required fields.
-   * The difference in the Excel file is POSTING DATE:
+   * Closed is selected when:
+   *   - eligibility screening is after today
+   *   - submission of bids is after today
+   *   - the row has the basic procurement information
    *
-   * Active = before/today
-   * Closed = after/today
+   * More specific statuses above take priority.
    */
 
   const basicFields = [
@@ -845,32 +881,43 @@ function determineAutomaticStatus_(
         hasValue_(data[field])
     );
 
-  if (basicConditionsMet) {
+  if (
+    basicConditionsMet &&
+    futureEligibilityAndBids
+  ) {
 
-    const postingDate =
-      normalizeDate_(
-        data['POSTING DATE']
-      );
+    return 'Closed';
 
-    if (postingDate) {
+  }
 
-      const today =
-        normalizeDate_(
-          new Date()
-        );
 
-      if (
-        postingDate.getTime() >
-        today.getTime()
-      ) {
+  /*
+   * ----------------------------------------------------------
+   * ACTIVE
+   * ----------------------------------------------------------
+   *
+   * Active is selected when:
+   *   - POSTING DATE is today or earlier
+   *   - the basic procurement information exists
+   *   - PO TOTAL COST is 0 / 0.00
+   */
 
-        return 'Closed';
+  if (
+    basicConditionsMet &&
+    postingIsBeforeOrToday &&
+    isZero_(
+      data['PO TOTAL COST'],
+      displayValue_(
+        sheet,
+        row,
+        headers,
+        'PO TOTAL COST'
+      )
+    )
+  ) {
 
-      }
+    return 'Active';
 
-      return 'Active';
-
-    }
   }
 
 
