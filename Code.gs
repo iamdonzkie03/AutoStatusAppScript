@@ -410,28 +410,9 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  try {
-    if (!e || !e.range) return;
-
-    const sheet = e.range.getSheet();
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-
-    const firstRow = Math.max(e.range.getRow(), CONFIG.HEADER_ROW + 1);
-    const lastRow = e.range.getRow() + e.range.getNumRows() - 1;
-
-    const headers = getHeaders_(sheet);
-    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-    if (statusColumn <= 0) return;
-
-    for (let row = firstRow; row <= lastRow; row++) {
-      updateRowStatus_(sheet, row, headers, statusColumn);
-    }
-
-    SpreadsheetApp.flush();
-
-  } catch (error) {
-    console.error('onEdit status engine error:', error);
-  }
+  // Status changes and validation are handled by the installable
+  // validatorOnEdit trigger. Keeping this simple trigger empty avoids
+  // race conditions between two edit handlers.
 }
 
 
@@ -440,17 +421,7 @@ function onEdit(e) {
  * ============================================================ */
 
 function onOpen(e) {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
-    if (!sheet) return;
-
-    refreshAllStatuses_(sheet);
-    SpreadsheetApp.flush();
-
-  } catch (error) {
-    console.error('onOpen status engine error:', error);
-  }
+  // The installable validatorOnOpen trigger handles status refresh.
 }
 
 
@@ -461,11 +432,17 @@ function onOpen(e) {
 function updateRowStatus_(sheet, row, headers, statusColumn) {
   if (row <= CONFIG.HEADER_ROW) return;
 
-  const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
-  if (!automaticStatus) return;
-
   const statusCell = sheet.getRange(row, statusColumn);
+  const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
   const currentStatus = normalizeText_(statusCell.getDisplayValue());
+
+  // If the row contains no procurement data, STATUS must be cleared.
+  if (!automaticStatus) {
+    if (currentStatus !== '') {
+      statusCell.clearContent();
+    }
+    return;
+  }
 
   if (currentStatus !== automaticStatus) {
     statusCell.setValue(automaticStatus);
