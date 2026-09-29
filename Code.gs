@@ -579,12 +579,14 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    *
    * Active:
-   *   POSTING DATE, ELIGIBILITY SCREENING, AND SUBMISSION OF BIDS
-   *   are all today or earlier.
+   *   ELIGIBILITY SCREENING OR SUBMISSION OF BIDS is today or later.
    *
-   * Closed / Failed / Awarded / Purchase Order:
-   *   ELIGIBILITY SCREENING AND SUBMISSION OF BIDS
-   *   are both strictly after today.
+   * Closed:
+   *   ELIGIBILITY SCREENING AND SUBMISSION OF BIDS are both
+   *   strictly before today.
+   *
+   * Failed / Awarded / Purchase Order:
+   *   retain their existing downstream-stage rules.
    *
    * The more specific statuses are checked first so that
    * completed procurement stages are not overwritten by Closed.
@@ -611,30 +613,36 @@ function determineAutomaticStatus_(
     postingDate &&
     postingDate.getTime() <= today.getTime();
 
-  const eligibilityIsBeforeOrToday =
+  const eligibilityIsBeforeToday =
     eligibilityDate &&
-    eligibilityDate.getTime() <= today.getTime();
+    eligibilityDate.getTime() < today.getTime();
 
-  const submissionIsBeforeOrToday =
+  const submissionIsBeforeToday =
     submissionDate &&
-    submissionDate.getTime() <= today.getTime();
+    submissionDate.getTime() < today.getTime();
 
-  const eligibilityIsAfterToday =
+  const eligibilityIsTodayOrAfter =
     eligibilityDate &&
-    eligibilityDate.getTime() > today.getTime();
+    eligibilityDate.getTime() >= today.getTime();
 
-  const submissionIsAfterToday =
+  const submissionIsTodayOrAfter =
     submissionDate &&
-    submissionDate.getTime() > today.getTime();
+    submissionDate.getTime() >= today.getTime();
 
-  const futureEligibilityAndBids =
-    eligibilityIsAfterToday === true &&
-    submissionIsAfterToday === true;
+  // Active when either eligibility screening OR submission of bids
+  // is today or later.
+  const activeDateCondition =
+    eligibilityIsTodayOrAfter === true ||
+    submissionIsTodayOrAfter === true;
 
-  // IMPORTANT: these flags are intentionally mutually exclusive for valid
-  // dates. Active = all three dates are TODAY OR EARLIER.
-  // Closed = eligibility AND submission are STRICTLY AFTER TODAY.
-  // Never invert these comparisons.
+  // Closed only when BOTH dates are strictly before today.
+  const closedDateCondition =
+    eligibilityIsBeforeToday === true &&
+    submissionIsBeforeToday === true;
+
+  // IMPORTANT:
+  // Active = either eligibility OR submission is TODAY OR LATER.
+  // Closed = BOTH eligibility AND submission are STRICTLY BEFORE TODAY.
 
 
   /*
