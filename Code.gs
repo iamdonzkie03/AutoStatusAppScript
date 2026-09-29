@@ -912,14 +912,13 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    * ACTIVE
    * ----------------------------------------------------------
-   * Active means ALL three milestone dates are today or earlier.
-   * This check is intentionally performed before Closed.
+   * Active when EITHER eligibility screening OR submission of
+   * bids is today or later.
    */
   if (
     basicConditionsMet &&
     postingIsBeforeOrToday === true &&
-    eligibilityIsBeforeOrToday === true &&
-    submissionIsBeforeOrToday === true &&
+    activeDateCondition === true &&
     isZero_(
       data['PO TOTAL COST'],
       displayValue_(sheet, row, headers, 'PO TOTAL COST')
@@ -932,12 +931,12 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    * CLOSED
    * ----------------------------------------------------------
-   * Closed means BOTH eligibility screening and submission of
-   * bids are strictly after today.
+   * Closed only when BOTH eligibility screening and submission
+   * of bids are strictly before today.
    */
   if (
     basicConditionsMet &&
-    futureEligibilityAndBids
+    closedDateCondition
   ) {
     return 'Closed';
   }
