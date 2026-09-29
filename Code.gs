@@ -74,7 +74,7 @@ const STATUS_RULES = {
     'PR NO.': 'required',
     'PR TOTAL ABC': 'required',
     'PRE-PROCUREMENT CONFERENCE': 'required',
-    'POSTING DATE': 'before',
+    'POSTING DATE': 'required',
     'PHILGEPS REFERENCE NO.': 'required',
     'PROJECT ID': 'required',
     'PRE-BID CONFERENCE': 'required',
