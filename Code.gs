@@ -335,41 +335,175 @@ const FIELD_FORMATS = {
 
 function setupValidator() {
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss =
+    SpreadsheetApp.getActiveSpreadsheet();
 
   // Remove duplicate validator triggers.
-  const triggers = ScriptApp.getProjectTriggers();
+  const triggers =
+    ScriptApp.getProjectTriggers();
 
-  triggers.forEach(trigger => {
+  triggers.forEach(
+    trigger => {
 
-    const handler = trigger.getHandlerFunction();
+      const handler =
+        trigger.getHandlerFunction();
 
-    if (handler === 'validatorOnEdit') {
-      ScriptApp.deleteTrigger(trigger);
+      if (
+        handler === 'validatorOnEdit' ||
+        handler === 'validatorOnOpen'
+      ) {
+
+        ScriptApp.deleteTrigger(
+          trigger
+        );
+
+      }
+
     }
+  );
 
-  });
-
-  // Create the installable edit trigger.
-  ScriptApp.newTrigger('validatorOnEdit')
+  // Recalculate whenever data is edited.
+  ScriptApp.newTrigger(
+    'validatorOnEdit'
+  )
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
-  // Make sure the target sheet exists.
-  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  // Recalculate whenever the spreadsheet is opened.
+  ScriptApp.newTrigger(
+    'validatorOnOpen'
+  )
+    .forSpreadsheet(ss)
+    .onOpen()
+    .create();
+
+  const sheet =
+    ss.getSheetByName(
+      CONFIG.SHEET_NAME
+    );
 
   if (!sheet) {
+
     throw new Error(
-      'Sheet "' + CONFIG.SHEET_NAME + '" was not found.'
+      'Sheet "' +
+      CONFIG.SHEET_NAME +
+      '" was not found.'
     );
+
   }
 
+  // Perform an immediate refresh as part of setup.
+  refreshAllStatuses_(sheet);
+
   SpreadsheetApp.getActive().toast(
-    'Procurement validator installed successfully.',
+    'Procurement validator installed successfully. Statuses will refresh on edit and on open.',
     'Validator',
     5
   );
+}
+
+
+/* ============================================================
+ * AUTOMATIC OPEN TRIGGER
+ * ============================================================ */
+
+function validatorOnOpen(e) {
+
+  try {
+
+    const ss =
+      SpreadsheetApp.getActiveSpreadsheet();
+
+    const sheet =
+      ss.getSheetByName(
+        CONFIG.SHEET_NAME
+      );
+
+    if (!sheet) return;
+
+    refreshAllStatuses_(sheet);
+
+  } catch (error) {
+
+    console.error(
+      'validatorOnOpen error:',
+      error
+    );
+
+  }
+}
+
+
+/*
+ * Recalculate every data row.
+ *
+ * This is important because a status can change simply because
+ * today's date has changed, even when nobody edited the row.
+ */
+function refreshAllStatuses_(sheet) {
+
+  if (!sheet) return;
+
+  const headers =
+    getHeaders_(sheet);
+
+  const statusColumn =
+    headers.indexOf(
+      CONFIG.STATUS_HEADER
+    ) + 1;
+
+  if (statusColumn <= 0) return;
+
+  const lastRow =
+    sheet.getLastRow();
+
+  if (
+    lastRow <= CONFIG.HEADER_ROW
+  ) {
+    return;
+  }
+
+  for (
+    let row = CONFIG.HEADER_ROW + 1;
+    row <= lastRow;
+    row++
+  ) {
+
+    const automaticStatus =
+      determineAutomaticStatus_(
+        sheet,
+        row,
+        headers
+      );
+
+    if (automaticStatus) {
+
+      const cell =
+        sheet.getRange(
+          row,
+          statusColumn
+        );
+
+      const current =
+        normalizeText_(
+          cell.getDisplayValue()
+        );
+
+      if (
+        current !== automaticStatus
+      ) {
+
+        cell.setValue(
+          automaticStatus
+        );
+
+      }
+
+    }
+
+  }
+
 }
 
 
@@ -604,8 +738,8 @@ function determineAutomaticStatus_(
     submissionDate.getTime() > today.getTime();
 
   const futureEligibilityAndBids =
-    eligibilityIsAfterToday &&
-    submissionIsAfterToday;
+    eligibilityIsAfterToday === true &&
+    submissionIsAfterToday === true;
 
 
   /*
@@ -1495,16 +1629,106 @@ function isValidDateValue_(
 
 function normalizeDate_(dateValue) {
 
-  const date = new Date(dateValue);
+  if (
+    dateValue === null ||
+    dateValue === undefined ||
+    dateValue === ''
+  ) {
+    return null;
+  }
 
-  if (isNaN(date.getTime())) {
+  /*
+   * Google Sheets normally returns real Date objects.
+   */
+  if (
+    Object.prototype.toString.call(dateValue) ===
+    '[object Date]'
+  ) {
+
+    if (isNaN(dateValue.getTime())) {
+      return null;
+    }
+
+    return new Date(
+      dateValue.getFullYear(),
+      dateValue.getMonth(),
+      dateValue.getDate()
+    );
+  }
+
+  /*
+   * Support displayed date text such as:
+   * September 29, 2026
+   * 09/29/2026
+   * 9/29/2026
+   *
+   * The first pattern is preferred because it is unambiguous.
+   */
+  const text = String(dateValue).trim();
+
+  if (!text) {
+    return null;
+  }
+
+  let match =
+    text.match(
+      /^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+(\\d{1,2}),\\s+(\\d{4})$/i
+    );
+
+  if (match) {
+
+    const monthNames = [
+      'january',
+      'february',
+      'march',
+      'april',
+      'may',
+      'june',
+      'july',
+      'august',
+      'september',
+      'october',
+      'november',
+      'december'
+    ];
+
+    const month =
+      monthNames.indexOf(
+        match[1].toLowerCase()
+      );
+
+    const day = Number(match[2]);
+    const year = Number(match[3]);
+
+    const parsed =
+      new Date(year, month, day);
+
+    if (
+      parsed.getFullYear() === year &&
+      parsed.getMonth() === month &&
+      parsed.getDate() === day
+    ) {
+      return parsed;
+    }
+
+    return null;
+  }
+
+  /*
+   * Support common numeric date displays.
+   * Google Sheets locale usually determines the display,
+   * so use the JavaScript parser only as a fallback.
+   */
+  const parsed = new Date(text);
+
+  if (isNaN(parsed.getTime())) {
     return null;
   }
 
   return new Date(
-    date.getFullYear(),
-    date.getMonth(),
-    date.getDate()
+    parsed.getFullYear(),
+    parsed.getMonth(),
+    parsed.getDate()
   );
 }
 
