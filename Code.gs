@@ -22,6 +22,7 @@
  */
 
 const CFG = {
+  TARGET_SHEET: 'Data List',
   HEADER_ROW: 1,
   STATUS_HEADER: 'STATUS',
   ERROR_PROPERTY: 'PROCUREMENT_VALIDATION_RESULT',
@@ -46,6 +47,11 @@ const CFG = {
 function setupAutomaticTriggers() {
 
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const targetSheet = ss.getSheetByName(CFG.TARGET_SHEET);
+
+  if (!targetSheet) {
+    throw new Error('Sheet "' + CFG.TARGET_SHEET + '" was not found.');
+  }
 
   /*
    * Remove previous copies of our installable triggers so
@@ -79,9 +85,7 @@ function setupAutomaticTriggers() {
 
 function refreshAllStatuses_() {
 
-  const sheet =
-    SpreadsheetApp.getActiveSpreadsheet()
-      .getActiveSheet();
+  const sheet = getTargetSheet_();
 
   if (!sheet) return;
 
@@ -155,6 +159,11 @@ function handleEdit_(e) {
     const range = e.range;
     const sheet = range.getSheet();
 
+    // This automation runs ONLY on the Data List sheet.
+    if (sheet.getName() !== CFG.TARGET_SHEET) {
+      return;
+    }
+
     /*
      * Ignore the header row.
      */
@@ -221,6 +230,13 @@ function handleEdit_(e) {
  * HtmlService window is a spreadsheet UI operation.
  */
 function onOpen(e) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+
+  // Do not run or open the monitor for any sheet other than Data List.
+  if (!sheet || sheet.getName() !== CFG.TARGET_SHEET) {
+    return;
+  }
+
   // Native simple onOpen owns the UI action. This is deliberately
   // separate from the authorized installable trigger used for data work.
   try {
@@ -233,6 +249,12 @@ function onOpen(e) {
 
 function onEdit(e) {
   return;
+}
+
+
+function getTargetSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName(CFG.TARGET_SHEET);
 }
 
 
@@ -1477,6 +1499,12 @@ function removeDuplicateErrors_(errors) {
  * ========================= */
 
 function openValidationMonitor_() {
+
+  const activeSheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+
+  if (!activeSheet || activeSheet.getName() !== CFG.TARGET_SHEET) {
+    return;
+  }
 
   const html =
     HtmlService
