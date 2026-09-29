@@ -944,15 +944,8 @@ function determineAutomaticStatus_(
 
   /*
    * ----------------------------------------------------------
-   * CLOSED
+   * BASIC PROCUREMENT FIELDS
    * ----------------------------------------------------------
-   *
-   * Closed is selected when:
-   *   - eligibility screening is after today
-   *   - submission of bids is after today
-   *   - the row has the basic procurement information
-   *
-   * More specific statuses above take priority.
    */
 
   const basicFields = [
@@ -971,50 +964,40 @@ function determineAutomaticStatus_(
   ];
 
   const basicConditionsMet =
-    basicFields.every(
-      field =>
-        hasValue_(data[field])
-    );
-
-  if (
-    basicConditionsMet &&
-    futureEligibilityAndBids
-  ) {
-
-    return 'Closed';
-
-  }
-
+    basicFields.every(field => hasValue_(data[field]));
 
   /*
    * ----------------------------------------------------------
    * ACTIVE
    * ----------------------------------------------------------
-   *
-   * Active is selected when:
-   *   - POSTING DATE is today or earlier
-   *   - the basic procurement information exists
-   *   - PO TOTAL COST is 0 / 0.00
+   * Active means ALL three milestone dates are today or earlier.
+   * This check is intentionally performed before Closed.
    */
-
   if (
     basicConditionsMet &&
-    postingIsBeforeOrToday &&
+    postingIsBeforeOrToday === true &&
     eligibilityIsBeforeOrToday === true &&
     submissionIsBeforeOrToday === true &&
     isZero_(
       data['PO TOTAL COST'],
-      displayValue_(
-        sheet,
-        row,
-        headers,
-        'PO TOTAL COST'
-      )
+      displayValue_(sheet, row, headers, 'PO TOTAL COST')
     )
   ) {
-
     return 'Active';
+  }
 
+  /*
+   * ----------------------------------------------------------
+   * CLOSED
+   * ----------------------------------------------------------
+   * Closed means BOTH eligibility screening and submission of
+   * bids are strictly after today.
+   */
+  if (
+    basicConditionsMet &&
+    futureEligibilityAndBids
+  ) {
+    return 'Closed';
   }
 
 
@@ -1647,7 +1630,7 @@ function normalizeDate_(dateValue) {
 
   let match =
     text.match(
-      /^(January|February|March|April|May|June|July|August|September|October|November|December)\\s+(\\d{1,2}),\\s+(\\d{4})$/i
+      /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})$/i
     );
 
   if (match) {
