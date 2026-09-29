@@ -672,7 +672,7 @@ function validateForStatus_(data, status, errors) {
           'There is no data inputted.'
         );
       } else {
-        validateAlphanumericField_(
+        validateTextField_(
           data,
           errors,
           'SUPPLIER'
@@ -740,13 +740,13 @@ function validateForStatus_(data, status, errors) {
 
     validateProjectId_(data, errors);
 
-    validateAlphanumericField_(
+    validateTextField_(
       data,
       errors,
       'SUPPLIER'
     );
 
-    validateAlphanumericField_(
+    validateTextField_(
       data,
       errors,
       'PO NO.'
@@ -1045,27 +1045,35 @@ function validateProjectId_(data, errors) {
     getValue_(data, key) || ''
   ).trim();
 
-  if (!value) return;
-
-  if (
-    !/^[A-Za-z0-9\s\-\/.&(),'#]+$/.test(value)
-  ) {
-
-    addError_(
-      errors,
-      data.row,
-      key,
-      'Please use a valid alphanumeric Project ID.'
-    );
+  /*
+   * PROJECT ID is free-form text.
+   * Letters, numbers, spaces, punctuation and symbols are all allowed.
+   * The only invalid value for this format check is blank.
+   */
+  if (!value) {
+    return;
   }
 }
 
 
 /* =========================
- * ALPHANUMERIC
+ * FREE-FORM TEXT
+ * =========================
+ *
+ * Former "alphanumeric" fields now accept:
+ *   - letters
+ *   - numbers
+ *   - spaces
+ *   - punctuation
+ *   - symbols
+ *   - special characters
+ *   - any combination of the above
+ *
+ * The format validator only rejects a blank value when the field
+ * is required. It does NOT restrict characters.
  * ========================= */
 
-function validateAlphanumericField_(
+function validateTextField_(
   data,
   errors,
   field
@@ -1079,18 +1087,12 @@ function validateAlphanumericField_(
     getValue_(data, field) || ''
   ).trim();
 
-  if (!value) return;
-
-  if (
-    !/^[A-Za-z0-9\s\-\/.&(),'#]+$/.test(value)
-  ) {
-
-    addError_(
-      errors,
-      data.row,
-      field,
-      'Please use a valid alphanumeric value.'
-    );
+  /*
+   * Free-form text:
+   * No character whitelist is applied.
+   */
+  if (!value) {
+    return;
   }
 }
 
