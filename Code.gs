@@ -78,8 +78,8 @@ const STATUS_RULES = {
     'PHILGEPS REFERENCE NO.': 'required',
     'PROJECT ID': 'required',
     'PRE-BID CONFERENCE': 'required',
-    'ELIGIBILITY SCREENING': 'required',
-    'SUBMISSION OF BIDS': 'required',
+    'ELIGIBILITY SCREENING': 'before',
+    'SUBMISSION OF BIDS': 'before',
     'DETAILED BID EVALUATION': 'blank',
     'POST-QUALIFICATION': 'blank',
     'NOA DATE': 'blank',
@@ -650,11 +650,12 @@ function determineAutomaticStatus_(
    * ----------------------------------------------------------
    *
    * Active:
-   *   POSTING DATE is today or earlier.
+   *   POSTING DATE, ELIGIBILITY SCREENING, AND SUBMISSION OF BIDS
+   *   are all today or earlier.
    *
    * Closed / Failed / Awarded / Purchase Order:
    *   ELIGIBILITY SCREENING AND SUBMISSION OF BIDS
-   *   are both after today.
+   *   are both strictly after today.
    *
    * The more specific statuses are checked first so that
    * completed procurement stages are not overwritten by Closed.
@@ -680,6 +681,14 @@ function determineAutomaticStatus_(
   const postingIsBeforeOrToday =
     postingDate &&
     postingDate.getTime() <= today.getTime();
+
+  const eligibilityIsBeforeOrToday =
+    eligibilityDate &&
+    eligibilityDate.getTime() <= today.getTime();
+
+  const submissionIsBeforeOrToday =
+    submissionDate &&
+    submissionDate.getTime() <= today.getTime();
 
   const eligibilityIsAfterToday =
     eligibilityDate &&
@@ -991,6 +1000,8 @@ function determineAutomaticStatus_(
   if (
     basicConditionsMet &&
     postingIsBeforeOrToday &&
+    eligibilityIsBeforeOrToday === true &&
+    submissionIsBeforeOrToday === true &&
     isZero_(
       data['PO TOTAL COST'],
       displayValue_(
@@ -1335,7 +1346,7 @@ function validateRow_(
           status: status,
           field: header,
           message:
-            'A date is required and it must be today or later.'
+            'A date is required and it must be after today.'
         });
 
         return;
@@ -1521,11 +1532,11 @@ function validateDate_(
 
   if (
     direction === 'after' &&
-    dateNumber < todayNumber
+    dateNumber <= todayNumber
   ) {
 
     return (
-      'Invalid date. The date must be today or later.'
+      'Invalid date. The date must be after today.'
     );
 
   }
