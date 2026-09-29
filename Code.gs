@@ -635,6 +635,16 @@ function determineAutomaticStatus_(
   );
 
 
+  // Keep STATUS blank when the entire procurement row has no data.
+  const rowHasAnyData = headers
+    .filter(header => header && header !== CONFIG.STATUS_HEADER)
+    .some(header => hasValue_(data[header]));
+
+  if (!rowHasAnyData) {
+    return '';
+  }
+
+
   /*
    * ----------------------------------------------------------
    * DATE-BASED STATUS TRANSITION
