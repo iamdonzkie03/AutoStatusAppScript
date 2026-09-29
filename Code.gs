@@ -377,8 +377,9 @@ function setupValidator() {
     }
   });
 
-  // Status calculation is handled by the simple onEdit/onOpen functions.
-  // The installable edit trigger is used only for the HTML validation dialog.
+  // The installable edit trigger is the single source of truth for both
+  // automatic STATUS calculation and validation. This prevents two edit
+  // handlers from racing or producing opposite/stale results.
   ScriptApp.newTrigger('validatorOnEdit')
     .forSpreadsheet(ss)
     .onEdit()
@@ -410,31 +411,8 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  // Direct edit-time status engine. This runs automatically whenever
-  // a user edits the Data List sheet and does not depend on setupValidator()
-  // being re-run after code changes.
-  try {
-    if (!e || !e.range) return;
-
-    const sheet = e.range.getSheet();
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-    if (e.range.getRow() <= CONFIG.HEADER_ROW) return;
-
-    const headers = getHeaders_(sheet);
-    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-    if (statusColumn <= 0) return;
-
-    const firstRow = e.range.getRow();
-    const lastRow = firstRow + e.range.getNumRows() - 1;
-
-    for (let row = firstRow; row <= lastRow; row++) {
-      updateRowStatus_(sheet, row, headers, statusColumn);
-    }
-
-    SpreadsheetApp.flush();
-  } catch (error) {
-    console.error('onEdit status engine error:', error);
-  }
+  // Intentionally empty. All edit processing is handled by the
+  // installable validatorOnEdit trigger created by setupValidator().
 }
 
 
@@ -515,93 +493,44 @@ function refreshAllStatuses_(sheet) {
  * ============================================================ */
 
 function validatorOnEdit(e) {
-
   try {
-
     if (!e || !e.range) return;
 
     const range = e.range;
     const sheet = range.getSheet();
-
-    // ONLY Data List
     if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-
-    // Ignore header
     if (range.getRow() <= CONFIG.HEADER_ROW) return;
 
     const headers = getHeaders_(sheet);
-
-    const statusColumn =
-      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-
+    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
     if (statusColumn <= 0) return;
 
     const firstRow = range.getRow();
-    const lastRow =
-      firstRow + range.getNumRows() - 1;
-
+    const lastRow = firstRow + range.getNumRows() - 1;
     const allErrors = [];
 
-    /*
-     * Process every affected row.
-     */
-    for (
-      let row = firstRow;
-      row <= lastRow;
-      row++
-    ) {
-
+    for (let row = firstRow; row <= lastRow; row++) {
       const statusCell = sheet.getRange(row, statusColumn);
       const oldStatus = normalizeText_(statusCell.getDisplayValue());
+      const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
 
-      // Calculate the status AFTER the user's edit.
-      const automaticStatus = determineAutomaticStatus_(
-        sheet,
-        row,
-        headers
-      );
+      if (!automaticStatus) {
+        if (oldStatus !== '') statusCell.clearContent();
+        continue;
+      }
 
-      // If no complete status can be determined, do not show a modal.
-      if (!automaticStatus) continue;
-
-      // Only validate/show the modal when the status actually changed.
       if (oldStatus === automaticStatus) continue;
 
       statusCell.setValue(automaticStatus);
       SpreadsheetApp.flush();
 
-      const rowErrors = validateRow_(
-        sheet,
-        row,
-        headers,
-        automaticStatus
-      );
-
-      rowErrors.forEach(
-        error => allErrors.push(error)
-      );
+      const rowErrors = validateRow_(sheet, row, headers, automaticStatus);
+      rowErrors.forEach(error => allErrors.push(error));
     }
 
-    /*
-     * --------------------------------------------------------
-     * 4. SHOW ONE MODAL CONTAINING ALL ERRORS
-     * --------------------------------------------------------
-     */
-    if (allErrors.length > 0) {
-
-      showValidationModal_(
-        allErrors
-      );
-
-    }
-
+    if (allErrors.length > 0) showValidationModal_(allErrors);
   } catch (error) {
-
-    console.error(
-      'validatorOnEdit error:',
-      error
-    );
-
+    console.error('validatorOnEdit error:', error);
   }
 }
 
@@ -701,6 +630,11 @@ function determineAutomaticStatus_(
   const futureEligibilityAndBids =
     eligibilityIsAfterToday === true &&
     submissionIsAfterToday === true;
+
+  // IMPORTANT: these flags are intentionally mutually exclusive for valid
+  // dates. Active = all three dates are TODAY OR EARLIER.
+  // Closed = eligibility AND submission are STRICTLY AFTER TODAY.
+  // Never invert these comparisons.
 
 
   /*
