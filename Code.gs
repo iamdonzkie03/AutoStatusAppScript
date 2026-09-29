@@ -58,7 +58,7 @@ const CONFIG = {
  *   field must contain zero / 0.00
  *
  * before:
- *   date must be today or earlier
+ *   date must be strictly before today
  *
  * after:
  *   date must be today or later
@@ -1225,7 +1225,7 @@ function validateRow_(
           status: status,
           field: header,
           message:
-            'A date is required and it must be today or earlier.'
+            'A date is required and it must be before today.'
         });
 
         return;
@@ -1271,7 +1271,7 @@ function validateRow_(
           status: status,
           field: header,
           message:
-            'A date is required and it must be after today.'
+            'A date is required and it must be today or later.'
         });
 
         return;
@@ -1445,11 +1445,11 @@ function validateDate_(
 
   if (
     direction === 'before' &&
-    dateNumber > todayNumber
+    dateNumber >= todayNumber
   ) {
 
     return (
-      'Invalid date. The date must be today or earlier.'
+      'Invalid date. The date must be before today.'
     );
 
   }
@@ -1457,11 +1457,11 @@ function validateDate_(
 
   if (
     direction === 'after' &&
-    dateNumber <= todayNumber
+    dateNumber < todayNumber
   ) {
 
     return (
-      'Invalid date. The date must be after today.'
+      'Invalid date. The date must be today or later.'
     );
 
   }
