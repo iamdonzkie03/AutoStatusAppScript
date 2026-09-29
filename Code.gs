@@ -640,6 +640,15 @@ function determineAutomaticStatus_(
     eligibilityIsBeforeToday === true &&
     submissionIsBeforeToday === true;
 
+  // Existing downstream statuses (Failed, Awarded, Purchase Order)
+  // still require BOTH eligibility screening and submission of bids
+  // to be strictly after today.
+  const futureEligibilityAndBids =
+    eligibilityDate &&
+    submissionDate &&
+    eligibilityDate.getTime() > today.getTime() &&
+    submissionDate.getTime() > today.getTime();
+
   // IMPORTANT:
   // Active = either eligibility OR submission is TODAY OR LATER.
   // Closed = BOTH eligibility AND submission are STRICTLY BEFORE TODAY.
