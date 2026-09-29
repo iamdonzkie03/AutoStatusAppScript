@@ -88,7 +88,7 @@ const STATUS_RULES = {
     'SUPPLIER': 'blank',
     'DATE PREPARED (PO)': 'blank',
     'PO NO.': 'blank',
-    'PO TOTAL COST': 'blank',
+    'PO TOTAL COST': 'zero',
     'PROJECT TITLE': 'required',
     'PROCUREMENT METHOD': 'required',
     'REMARKS': 'blank'
@@ -113,7 +113,7 @@ const STATUS_RULES = {
     'SUPPLIER': 'blank',
     'DATE PREPARED (PO)': 'blank',
     'PO NO.': 'blank',
-    'PO TOTAL COST': 'blank',
+    'PO TOTAL COST': 'zero',
     'PROJECT TITLE': 'required',
     'PROCUREMENT METHOD': 'required',
     'REMARKS': 'blank'
@@ -138,7 +138,7 @@ const STATUS_RULES = {
     'SUPPLIER': 'blank',
     'DATE PREPARED (PO)': 'blank',
     'PO NO.': 'blank',
-    'PO TOTAL COST': 'blank',
+    'PO TOTAL COST': 'zero',
     'PROJECT TITLE': 'required',
     'PROCUREMENT METHOD': 'required',
     'REMARKS': 'blank'
@@ -163,7 +163,7 @@ const STATUS_RULES = {
     'SUPPLIER': 'required',
     'DATE PREPARED (PO)': 'blank',
     'PO NO.': 'blank',
-    'PO TOTAL COST': 'blank',
+    'PO TOTAL COST': 'zero',
     'PROJECT TITLE': 'required',
     'PROCUREMENT METHOD': 'required',
     'REMARKS': 'blank'
@@ -1284,40 +1284,6 @@ function validateFormat_(
   }
 
 
-  function isTextValue_(text) {
-
-  /*
-   * Accept ANY text content:
-   *
-   * Letters
-   * Numbers
-   * Symbols
-   * Special characters
-   * Spaces
-   * Punctuation
-   *
-   * Examples:
-   * ABC
-   * 12345
-   * PR-2026/001
-   * ABC #123 @ 50%
-   * Supplier & Trading Co., Ltd.
-   * ₱100,000.00
-   * TEST!!! @@@ ###
-   *
-   * The only invalid value is blank.
-   */
-
-  if (
-    text === null ||
-    text === undefined
-  ) {
-    return false;
-  }
-
-  return String(text).trim() !== '';
-}
-
 if (format === 'text') {
 
   if (!isTextValue_(displayValue)) {
@@ -1576,27 +1542,24 @@ function isZero_(
 
 
 /* ============================================================
- * ALPHANUMERIC CHECK
- *
- * Spaces and common punctuation are allowed because fields
- * such as PROJECT TITLE and SUPPLIER naturally contain spaces.
+ * FREE-FORM TEXT CHECK
  * ============================================================ */
 
-function isAlphanumeric_(text) {
+function isTextValue_(text) {
 
-  if (!text) {
+  /*
+   * Accept any non-blank text, numbers, punctuation,
+   * symbols, spaces and special characters.
+   */
+
+  if (
+    text === null ||
+    text === undefined
+  ) {
     return false;
   }
 
-  /*
-   * Reject values containing characters that are clearly not
-   * part of an ordinary alphanumeric entry.
-   *
-   * Letters, numbers, spaces and common procurement reference
-   * punctuation are allowed.
-   */
-
-  return /^[A-Za-z0-9\s._\/\-()&,#]+$/.test(text);
+  return String(text).trim() !== '';
 }
 
 
