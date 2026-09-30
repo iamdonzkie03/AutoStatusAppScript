@@ -365,7 +365,9 @@ function setupValidator() {
     throw new Error('Sheet "' + CONFIG.SHEET_NAME + '" was not found.');
   }
 
-  // Remove only triggers created by this validator.
+  // Remove legacy/competing validator triggers.
+  // Automatic STATUS calculation is intentionally handled only by the
+  // simple onEdit(e) trigger so every editor gets the same behavior.
   ScriptApp.getProjectTriggers().forEach(trigger => {
     const handler = trigger.getHandlerFunction();
     if (
@@ -377,31 +379,24 @@ function setupValidator() {
     }
   });
 
-  // The installable edit trigger is the single source of truth for both
-  // automatic STATUS calculation and validation. This prevents two edit
-  // handlers from racing or producing opposite/stale results.
-  ScriptApp.newTrigger('validatorOnEdit')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
+  // Only the refresh-on-open handler remains installable.
+  // It is not part of the edit-time STATUS engine.
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
     .create();
 
-  // Refresh immediately.
+  // Refresh existing rows immediately.
   refreshAllStatuses_(sheet);
 
   SpreadsheetApp.flush();
 
   ss.toast(
-    'Validator installed. Status calculation is now independent from the validation modal.',
+    'Automatic STATUS is enabled for all editors. Validation is separated from the edit-time status engine.',
     'Validator',
     5
   );
 }
-
 
 /* ============================================================
  * SIMPLE ON EDIT - STATUS ENGINE
@@ -735,51 +730,11 @@ function refreshAllStatuses_(sheet) {
  * ============================================================ */
 
 function validatorOnEdit(e) {
-  try {
-    if (!e || !e.range) return;
-
-    const range = e.range;
-    const sheet = range.getSheet();
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-    if (range.getRow() <= CONFIG.HEADER_ROW) return;
-
-    const headers = getHeaders_(sheet);
-    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-    if (statusColumn <= 0) return;
-
-    const firstRow = range.getRow();
-    const lastRow = firstRow + range.getNumRows() - 1;
-    const allErrors = [];
-
-    for (let row = firstRow; row <= lastRow; row++) {
-      const statusCell = sheet.getRange(row, statusColumn);
-      const oldStatus = normalizeText_(statusCell.getDisplayValue());
-      const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
-
-      if (!automaticStatus) {
-        if (oldStatus !== '') statusCell.clearContent();
-        continue;
-      }
-
-      if (oldStatus === automaticStatus) continue;
-
-      statusCell.setValue(automaticStatus);
-
-      const rowErrors = validateRow_(sheet, row, headers, automaticStatus);
-      rowErrors.forEach(error => allErrors.push(error));
-    }
-
-    if (allErrors.length > 0) {
-      // Flush only when a validation dialog is actually needed so the
-      // newly assigned status is visible before the modal opens.
-      SpreadsheetApp.flush();
-      showValidationModal_(allErrors);
-    }
-  } catch (error) {
-    console.error('validatorOnEdit error:', error);
-  }
+  // Deprecated. Automatic STATUS calculation is handled exclusively by
+  // the simple onEdit(e) trigger. This function intentionally does nothing
+  // so an old installable trigger cannot compete with the status engine.
+  return;
 }
-
 /* ============================================================
  * AUTOMATIC STATUS DETERMINATION
  * ============================================================ */
