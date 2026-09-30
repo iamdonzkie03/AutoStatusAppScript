@@ -379,20 +379,12 @@ function setupValidator() {
   });
 
   /*
-   * INSTALLABLE EDIT TRIGGER
+   * No installable edit trigger is created.
    *
-   * This is the production STATUS engine.
-   *
-   * Installable triggers run when other editors modify the spreadsheet
-   * and execute using the authorization of the account that installed
-   * the trigger. No editor needs to install their own trigger.
-   *
-   * IMPORTANT: this handler performs NO modal/UI operation.
+   * Automatic STATUS is handled by the built-in onEdit(e) above.
+   * This makes STATUS updates independent of trigger installation
+   * and available to every editor of the bound spreadsheet.
    */
-  ScriptApp.newTrigger('validatorOnEdit')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
 
   /*
    * OPEN REFRESH
@@ -426,12 +418,48 @@ function setupValidator() {
 
 function onEdit(e) {
   /*
-   * Intentionally empty.
+   * BUILT-IN EDIT TRIGGER
    *
-   * Automatic STATUS is handled by the installable validatorOnEdit
-   * trigger created by setupValidator(). Keeping this simple trigger
-   * empty prevents duplicate status writes/races.
+   * This is the primary automatic STATUS engine.
+   * It fires automatically for every editor of the spreadsheet.
+   * No per-editor trigger installation is required.
+   *
+   * This handler performs spreadsheet-only operations and does not
+   * open dialogs or call services that require authorization.
    */
+  try {
+    if (!e || !e.range) return;
+
+    const range = e.range;
+    const sheet = range.getSheet();
+
+    if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
+
+    const firstRow = Math.max(
+      range.getRow(),
+      CONFIG.HEADER_ROW + 1
+    );
+    const lastRow = range.getRow() + range.getNumRows() - 1;
+
+    if (lastRow < firstRow) return;
+
+    const headers = getHeaders_(sheet);
+    const statusColumn =
+      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+
+    if (statusColumn <= 0) return;
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      updateAutomaticStatusFast_(
+        sheet,
+        row,
+        headers,
+        statusColumn
+      );
+    }
+  } catch (error) {
+    console.error('onEdit STATUS error:', error);
+  }
 }
 
 /* ============================================================
