@@ -766,11 +766,25 @@ function automaticStatusRulesSatisfied_(
     const rule = rules[field];
     const value = data[field];
     const displayValue = displayData[field];
+    const fieldFormat = FIELD_FORMATS[field];
 
+    // A required value must not merely be nonblank. Numeric and date
+    // fields must also have a valid format. This prevents malformed
+    // entries from silently creating a STATUS.
     if (rule === 'required') {
-      return (
-        isAcceptedValue_(field, value, displayValue) ||
-        !isBlankValue_(value, displayValue)
+      if (isAcceptedValue_(field, value, displayValue)) {
+        return true;
+      }
+
+      if (isBlankValue_(value, displayValue)) {
+        return false;
+      }
+
+      return isAutomaticFormatValid_(
+        field,
+        value,
+        displayValue,
+        fieldFormat
       );
     }
 
@@ -787,6 +801,15 @@ function automaticStatusRulesSatisfied_(
         return true;
       }
 
+      if (!isAutomaticFormatValid_(
+        field,
+        value,
+        displayValue,
+        'date'
+      )) {
+        return false;
+      }
+
       const date = normalizeDate_(value);
       const today = normalizeDate_(new Date());
 
@@ -799,6 +822,15 @@ function automaticStatusRulesSatisfied_(
     if (rule === 'after') {
       if (isAcceptedValue_(field, value, displayValue)) {
         return true;
+      }
+
+      if (!isAutomaticFormatValid_(
+        field,
+        value,
+        displayValue,
+        'date'
+      )) {
+        return false;
       }
 
       const date = normalizeDate_(value);
@@ -819,6 +851,35 @@ function automaticStatusRulesSatisfied_(
 
     return true;
   });
+}
+
+/**
+ * Automatic status format check.
+ *
+ * Unlike validateFormat_(), this helper never creates UI and can safely
+ * run from both simple and installable edit triggers.
+ */
+function isAutomaticFormatValid_(
+  field,
+  value,
+  displayValue,
+  format
+) {
+  if (!format) return true;
+
+  if (format === 'numeric') {
+    return isNumeric_(value, displayValue);
+  }
+
+  if (format === 'date') {
+    return isValidDateValue_(value, displayValue);
+  }
+
+  if (format === 'text') {
+    return isTextValue_(displayValue);
+  }
+
+  return true;
 }
 
 
@@ -2176,6 +2237,390 @@ function normalizeText_(value) {
 
 }
 
+
+/* ============================================================
+ * DIAGNOSTIC / HEALTH CHECK
+ *
+ * Run diagnoseActiveRow() manually from the Apps Script editor.
+ * It does NOT create a menu and does NOT modify procurement data.
+ *
+ * The dialog reports:
+ *   - trigger installation state
+ *   - required headers that are missing
+ *   - current row data
+ *   - every status that is close to qualifying
+ *   - the exact fields preventing each status
+ *   - the calculated automatic STATUS
+ * ============================================================ */
+
+function diagnoseActiveRow() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('No active spreadsheet found.');
+
+  const sheet = ss.getActiveSheet();
+  if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) {
+    SpreadsheetApp.getUi().alert(
+      'Diagnostic Error',
+      'Select a row on the "Data List" sheet and run diagnoseActiveRow() again.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  const headers = getHeaders_(sheet);
+  const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+
+  if (statusColumn <= 0) {
+    SpreadsheetApp.getUi().alert(
+      'Diagnostic Error',
+      'The STATUS header was not found in row ' + CONFIG.HEADER_ROW + '.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  const row = sheet.getActiveRange().getRow();
+  if (row <= CONFIG.HEADER_ROW) {
+    SpreadsheetApp.getUi().alert(
+      'Diagnostic Error',
+      'Select a data row below the header row before running the diagnostic.',
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+    return;
+  }
+
+  const lastColumn = sheet.getLastColumn();
+  const values = sheet.getRange(row, 1, 1, lastColumn).getValues()[0];
+  const displays = sheet.getRange(row, 1, 1, lastColumn).getDisplayValues()[0];
+
+  const data = {};
+  const displayData = {};
+
+  headers.forEach(function(header, index) {
+    if (!header) return;
+    data[header] = values[index];
+    displayData[header] = displays[index];
+  });
+
+  const calculatedStatus = determineAutomaticStatusFromData_(
+    data,
+    displayData
+  );
+
+  const currentStatus = normalizeText_(
+    sheet.getRange(row, statusColumn).getDisplayValue()
+  );
+
+  const missingHeaders = getMissingRequiredHeaders_(headers);
+  const diagnostics = [];
+
+  CONFIG.VALID_STATUSES.forEach(function(status) {
+    const blockers = getAutomaticStatusBlockers_(
+      status,
+      data,
+      displayData
+    );
+
+    diagnostics.push({
+      status: status,
+      blockers: blockers
+    });
+  });
+
+  const triggers = ScriptApp.getProjectTriggers()
+    .filter(function(trigger) {
+      const handler = trigger.getHandlerFunction();
+      return (
+        handler === 'validatorOnEdit' ||
+        handler === 'validatorOnOpen' ||
+        handler === 'validatorOnChange'
+      );
+    })
+    .map(function(trigger) {
+      return trigger.getHandlerFunction();
+    });
+
+  let html =
+    '<!doctype html><html><head><base target="_top">' +
+    '<style>' +
+    'body{font-family:Arial,sans-serif;padding:18px;color:#202124;background:#f8f9fa}' +
+    'h2{margin-top:0}' +
+    '.ok{color:#137333;font-weight:bold}' +
+    '.bad{color:#b3261e;font-weight:bold}' +
+    '.card{background:white;border:1px solid #dadce0;border-radius:8px;padding:12px;margin:10px 0}' +
+    '.status{font-weight:bold;font-size:15px}' +
+    'ul{margin:7px 0 0 20px;padding:0}' +
+    '.small{font-size:12px;color:#5f6368}' +
+    '</style></head><body>' +
+    '<h2>Procurement Validator Diagnostic</h2>' +
+    '<div class="card"><b>Sheet:</b> ' + escapeHtml_(sheet.getName()) +
+    ' &nbsp; <b>Row:</b> ' + escapeHtml_(row) + '</div>' +
+    '<div class="card"><b>Current STATUS:</b> ' +
+    escapeHtml_(currentStatus || '(blank)') +
+    '<br><b>Calculated STATUS:</b> ' +
+    escapeHtml_(calculatedStatus || '(none)') + '</div>' +
+    '<div class="card"><b>Validator triggers:</b> ' +
+    escapeHtml_(triggers.join(', ') || '(none)') + '</div>';
+
+  if (missingHeaders.length) {
+    html += '<div class="card"><div class="bad">Missing required headers</div><ul>';
+    missingHeaders.forEach(function(header) {
+      html += '<li>' + escapeHtml_(header) + '</li>';
+    });
+    html += '</ul></div>';
+  } else {
+    html += '<div class="card ok">All required procurement headers were found.</div>';
+  }
+
+  diagnostics.forEach(function(item) {
+    html += '<div class="card"><div class="status">' +
+      escapeHtml_(item.status) + '</div>';
+
+    if (item.blockers.length === 0) {
+      html += '<div class="ok">QUALIFIES</div>';
+    } else {
+      html += '<ul>';
+      item.blockers.forEach(function(blocker) {
+        html += '<li>' + escapeHtml_(blocker) + '</li>';
+      });
+      html += '</ul>';
+    }
+
+    html += '</div>';
+  });
+
+  html += '<div class="small">This diagnostic does not change STATUS or any other procurement field.</div>' +
+    '<p><button onclick="google.script.host.close()">Close</button></p>' +
+    '</body></html>';
+
+  SpreadsheetApp.getUi().showModalDialog(
+    HtmlService.createHtmlOutput(html)
+      .setWidth(700)
+      .setHeight(650),
+    'Validator Diagnostic'
+  );
+}
+
+/**
+ * Return the exact reasons a status is not currently satisfied.
+ */
+function getAutomaticStatusBlockers_(status, data, displayData) {
+  const rules = STATUS_RULES[status];
+  if (!rules) return ['Status rule definition not found.'];
+
+  const blockers = [];
+
+  Object.keys(rules).forEach(function(field) {
+    const rule = rules[field];
+    const value = data[field];
+    const displayValue = displayData[field];
+    const format = FIELD_FORMATS[field];
+
+    if (rule === 'required') {
+      if (isAcceptedValue_(field, value, displayValue)) return;
+
+      if (isBlankValue_(value, displayValue)) {
+        blockers.push(field + ': required value is blank.');
+        return;
+      }
+
+      if (!isAutomaticFormatValid_(field, value, displayValue, format)) {
+        blockers.push(field + ': invalid ' + format + ' format.');
+      }
+      return;
+    }
+
+    if (rule === 'blank') {
+      if (!isBlankValue_(value, displayValue)) {
+        blockers.push(field + ': must be blank.');
+      }
+      return;
+    }
+
+    if (rule === 'zero') {
+      if (!isZero_(value, displayValue)) {
+        blockers.push(field + ': must be 0 or 0.00.');
+      }
+      return;
+    }
+
+    if (rule === 'before' || rule === 'after') {
+      if (isAcceptedValue_(field, value, displayValue)) return;
+
+      if (isBlankValue_(value, displayValue)) {
+        blockers.push(field + ': date is required.');
+        return;
+      }
+
+      if (!isAutomaticFormatValid_(field, value, displayValue, 'date')) {
+        blockers.push(
+          field + ': invalid date format; expected ' + CONFIG.DATE_FORMAT + '.'
+        );
+        return;
+      }
+
+      const date = normalizeDate_(value);
+      const today = normalizeDate_(new Date());
+
+      if (!date) {
+        blockers.push(field + ': date could not be interpreted.');
+        return;
+      }
+
+      if (
+        rule === 'before' &&
+        date.getTime() >= today.getTime()
+      ) {
+        blockers.push(field + ': must be before today.');
+      }
+
+      if (
+        rule === 'after' &&
+        date.getTime() < today.getTime()
+      ) {
+        blockers.push(field + ': must be today or later.');
+      }
+
+      return;
+    }
+
+    if (rule.indexOf('exact:') === 0) {
+      const expected = rule.substring(6);
+      if (normalizeText_(displayValue) !== expected) {
+        blockers.push(field + ': must exactly equal "' + expected + '".');
+      }
+    }
+  });
+
+  // The date gates used by the automatic engine are additional to the
+  // per-field rules above. Report them explicitly so the diagnostic does
+  // not misleadingly say a status qualifies when its date gate fails.
+  const today = normalizeDate_(new Date());
+
+  const eligibility = isNAValue_('', displayData['ELIGIBILITY SCREENING'])
+    ? null
+    : normalizeDate_(data['ELIGIBILITY SCREENING']);
+
+  const submission = isNAValue_('', displayData['SUBMISSION OF BIDS'])
+    ? null
+    : normalizeDate_(data['SUBMISSION OF BIDS']);
+
+  const posting = isNAValue_('', displayData['POSTING DATE'])
+    ? null
+    : normalizeDate_(data['POSTING DATE']);
+
+  if (status === 'Active') {
+    if (!posting || posting.getTime() > today.getTime()) {
+      blockers.push('Date gate: POSTING DATE must be today or earlier.');
+    }
+
+    if (!(
+      (eligibility && eligibility.getTime() >= today.getTime()) ||
+      (submission && submission.getTime() >= today.getTime())
+    )) {
+      blockers.push(
+        'Date gate: ELIGIBILITY SCREENING or SUBMISSION OF BIDS must be today or later.'
+      );
+    }
+  }
+
+  if (status === 'Closed') {
+    if (!eligibility || eligibility.getTime() >= today.getTime()) {
+      blockers.push('Date gate: ELIGIBILITY SCREENING must be before today.');
+    }
+    if (!submission || submission.getTime() >= today.getTime()) {
+      blockers.push('Date gate: SUBMISSION OF BIDS must be before today.');
+    }
+  }
+
+  if (
+    status === 'Failed' ||
+    status === 'Awarded' ||
+    status === 'Purchase Order'
+  ) {
+    if (!eligibility || eligibility.getTime() <= today.getTime()) {
+      blockers.push('Date gate: ELIGIBILITY SCREENING must be after today.');
+    }
+    if (!submission || submission.getTime() <= today.getTime()) {
+      blockers.push('Date gate: SUBMISSION OF BIDS must be after today.');
+    }
+  }
+
+  return blockers;
+}
+
+/**
+ * Verify the structural headers expected by the procurement rules.
+ */
+function getMissingRequiredHeaders_(headers) {
+  const expected = new Set();
+
+  CONFIG.VALID_STATUSES.forEach(function(status) {
+    Object.keys(STATUS_RULES[status]).forEach(function(field) {
+      expected.add(field);
+    });
+  });
+
+  expected.add(CONFIG.STATUS_HEADER);
+
+  return Array.from(expected).filter(function(header) {
+    return headers.indexOf(header) === -1;
+  });
+}
+
+/**
+ * Manual health check for the Apps Script project.
+ *
+ * This is intentionally not attached to onOpen/onEdit and creates no menu.
+ */
+function validatorHealthCheck() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('No active spreadsheet found.');
+
+  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
+  if (!sheet) {
+    throw new Error('Sheet "' + CONFIG.SHEET_NAME + '" was not found.');
+  }
+
+  const headers = getHeaders_(sheet);
+  const missingHeaders = getMissingRequiredHeaders_(headers);
+
+  const triggers = ScriptApp.getProjectTriggers().map(function(trigger) {
+    return trigger.getHandlerFunction();
+  });
+
+  const report = [
+    'Spreadsheet: ' + ss.getName(),
+    'Sheet: ' + sheet.getName(),
+    'Rows: ' + Math.max(0, sheet.getLastRow() - CONFIG.HEADER_ROW),
+    'Columns: ' + sheet.getLastColumn(),
+    'STATUS column: ' +
+      (headers.indexOf(CONFIG.STATUS_HEADER) + 1),
+    'Missing headers: ' +
+      (missingHeaders.length ? missingHeaders.join(', ') : 'NONE'),
+    'validatorOnEdit triggers: ' +
+      triggers.filter(function(name) {
+        return name === 'validatorOnEdit';
+      }).length,
+    'validatorOnOpen triggers: ' +
+      triggers.filter(function(name) {
+        return name === 'validatorOnOpen';
+      }).length,
+    'Total project triggers: ' + triggers.length
+  ].join('\n');
+
+  console.log(report);
+
+  ss.toast(
+    missingHeaders.length
+      ? 'Validator health check found missing headers. See execution log.'
+      : 'Validator health check passed. See execution log.',
+    'Validator',
+    6
+  );
+
+  return report;
+}
 
 /* ============================================================
  * HTML MODAL
