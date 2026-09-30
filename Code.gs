@@ -411,8 +411,33 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  // Intentionally empty. All edit processing is handled by the
-  // installable validatorOnEdit trigger created by setupValidator().
+  // Simple triggers run in the context of the user who edited the sheet.
+  // Keep this path lightweight and use it ONLY for automatic STATUS
+  // calculation so shared editors do not depend on the trigger owner's
+  // authorization.
+  try {
+    if (!e || !e.range) return;
+
+    const range = e.range;
+    const sheet = range.getSheet();
+
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+    if (range.getRow() <= CONFIG.HEADER_ROW) return;
+
+    const headers = getHeaders_(sheet);
+    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+
+    if (statusColumn <= 0) return;
+
+    const firstRow = range.getRow();
+    const lastRow = firstRow + range.getNumRows() - 1;
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      updateAutomaticStatusFast_(sheet, row, headers, statusColumn);
+    }
+  } catch (error) {
+    console.error('onEdit status engine error:', error);
+  }
 }
 
 
@@ -430,13 +455,46 @@ function onOpen(e) {
  * ============================================================ */
 
 function updateRowStatus_(sheet, row, headers, statusColumn) {
+  updateAutomaticStatusFast_(sheet, row, headers, statusColumn);
+}
+
+/**
+ * Fast automatic status engine used by the simple onEdit trigger.
+ *
+ * This intentionally does not validate the row and does not open any UI.
+ * It only determines and writes the automatic procurement status.
+ */
+function updateAutomaticStatusFast_(sheet, row, headers, statusColumn) {
   if (row <= CONFIG.HEADER_ROW) return;
 
+  const lastColumn = sheet.getLastColumn();
+
+  // One read for the entire row.
+  const rowValues = sheet
+    .getRange(row, 1, 1, lastColumn)
+    .getValues()[0];
+
+  const rowDisplayValues = sheet
+    .getRange(row, 1, 1, lastColumn)
+    .getDisplayValues()[0];
+
+  const data = {};
+  const displayData = {};
+
+  headers.forEach((header, index) => {
+    if (!header) return;
+    data[header] = rowValues[index];
+    displayData[header] = rowDisplayValues[index];
+  });
+
+  const automaticStatus = determineAutomaticStatusFromData_(
+    data,
+    displayData
+  );
+
   const statusCell = sheet.getRange(row, statusColumn);
-  const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
   const currentStatus = normalizeText_(statusCell.getDisplayValue());
 
-  // If the row contains no procurement data, STATUS must be cleared.
   if (!automaticStatus) {
     if (currentStatus !== '') {
       statusCell.clearContent();
@@ -447,6 +505,190 @@ function updateRowStatus_(sheet, row, headers, statusColumn) {
   if (currentStatus !== automaticStatus) {
     statusCell.setValue(automaticStatus);
   }
+}
+
+/**
+ * Shared data-only status calculation.
+ *
+ * The existing determineAutomaticStatus_() remains available for the
+ * validation/legacy path. The simple-trigger path uses this function
+ * so it never performs one getRange() call per field.
+ */
+function determineAutomaticStatusFromData_(data, displayData) {
+  const rowHasAnyData = Object.keys(data).some(function(header) {
+    return header !== CONFIG.STATUS_HEADER && hasValue_(data[header]);
+  });
+
+  if (!rowHasAnyData) return '';
+
+  const today = normalizeDate_(new Date());
+
+  const postingDate = isNAValue_('', displayData['POSTING DATE'])
+    ? null
+    : normalizeDate_(data['POSTING DATE']);
+
+  const eligibilityDate = isNAValue_('', displayData['ELIGIBILITY SCREENING'])
+    ? null
+    : normalizeDate_(data['ELIGIBILITY SCREENING']);
+
+  const submissionDate = isNAValue_('', displayData['SUBMISSION OF BIDS'])
+    ? null
+    : normalizeDate_(data['SUBMISSION OF BIDS']);
+
+  const postingIsBeforeOrToday =
+    postingDate && postingDate.getTime() <= today.getTime();
+
+  const eligibilityIsBeforeToday =
+    eligibilityDate && eligibilityDate.getTime() < today.getTime();
+
+  const submissionIsBeforeToday =
+    submissionDate && submissionDate.getTime() < today.getTime();
+
+  const eligibilityIsTodayOrAfter =
+    eligibilityDate && eligibilityDate.getTime() >= today.getTime();
+
+  const submissionIsTodayOrAfter =
+    submissionDate && submissionDate.getTime() >= today.getTime();
+
+  const activeDateCondition =
+    eligibilityIsTodayOrAfter === true ||
+    submissionIsTodayOrAfter === true;
+
+  const closedDateCondition =
+    eligibilityIsBeforeToday === true &&
+    submissionIsBeforeToday === true;
+
+  const futureEligibilityAndBids =
+    eligibilityDate &&
+    submissionDate &&
+    eligibilityDate.getTime() > today.getTime() &&
+    submissionDate.getTime() > today.getTime();
+
+  // Cancelled/realigned statuses are checked before the normal
+  // procurement progression.
+  if (
+    textEquals_(data['REMARKS'], 'Cancelled PR') &&
+    isZero_(data['PR TOTAL ABC'], displayData['PR TOTAL ABC'])
+  ) {
+    return 'Cancelled PR';
+  }
+
+  if (
+    textEquals_(data['REMARKS'], 'Cancelled PO') &&
+    hasValue_(data['PO NO.']) &&
+    !hasValue_(data['PO TOTAL COST'])
+  ) {
+    return 'Cancelled PO';
+  }
+
+  if (
+    isZero_(data['TOTAL ABC'], displayData['TOTAL ABC']) &&
+    isZero_(data['PR TOTAL ABC'], displayData['PR TOTAL ABC']) &&
+    hasValue_(data['PR NO.'])
+  ) {
+    const realignmentFields = [
+      'PRE-PROCUREMENT CONFERENCE',
+      'POSTING DATE',
+      'PHILGEPS REFERENCE NO.',
+      'PROJECT ID',
+      'PRE-BID CONFERENCE',
+      'ELIGIBILITY SCREENING',
+      'SUBMISSION OF BIDS',
+      'DETAILED BID EVALUATION',
+      'POST-QUALIFICATION',
+      'NOA DATE',
+      'NTP DATE',
+      'BAC RESOLUTION NO.',
+      'SUPPLIER',
+      'DATE PREPARED (PO)',
+      'PO NO.',
+      'PO TOTAL COST',
+      'PROJECT TITLE',
+      'PROCUREMENT METHOD',
+      'REMARKS'
+    ];
+
+    const realigned = realignmentFields.every(function(field) {
+      return isBlankValue_(data[field], displayData[field]);
+    });
+
+    if (realigned) return 'Realigned Item';
+  }
+
+  const basicConditionsMet =
+    hasValue_(data['TOTAL ABC']) &&
+    hasValue_(data['PR NO.']) &&
+    hasValue_(data['PR TOTAL ABC']) &&
+    hasValue_(data['PRE-PROCUREMENT CONFERENCE']) &&
+    hasValue_(data['POSTING DATE']) &&
+    hasValue_(data['PHILGEPS REFERENCE NO.']) &&
+    hasValue_(data['PROJECT ID']) &&
+    hasValue_(data['PRE-BID CONFERENCE']) &&
+    hasValue_(data['ELIGIBILITY SCREENING']) &&
+    hasValue_(data['SUBMISSION OF BIDS']) &&
+    hasValue_(data['PROJECT TITLE']) &&
+    hasValue_(data['PROCUREMENT METHOD']);
+
+  if (
+    basicConditionsMet &&
+    postingIsBeforeOrToday === true &&
+    activeDateCondition === true &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Active';
+  }
+
+  if (
+    basicConditionsMet &&
+    closedDateCondition &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Closed';
+  }
+
+  if (
+    basicConditionsMet &&
+    futureEligibilityAndBids &&
+    hasValue_(data['BAC RESOLUTION NO.']) &&
+    isBlankValue_(data['SUPPLIER'], displayData['SUPPLIER']) &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Failed';
+  }
+
+  if (
+    basicConditionsMet &&
+    futureEligibilityAndBids &&
+    hasValue_(data['BAC RESOLUTION NO.']) &&
+    hasValue_(data['SUPPLIER']) &&
+    hasValue_(data['DETAILED BID EVALUATION']) &&
+    hasValue_(data['POST-QUALIFICATION']) &&
+    hasValue_(data['NOA DATE']) &&
+    hasValue_(data['NTP DATE']) &&
+    isBlankValue_(data['DATE PREPARED (PO)'], displayData['DATE PREPARED (PO)']) &&
+    isBlankValue_(data['PO NO.'], displayData['PO NO.']) &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Awarded';
+  }
+
+  if (
+    basicConditionsMet &&
+    futureEligibilityAndBids &&
+    hasValue_(data['BAC RESOLUTION NO.']) &&
+    hasValue_(data['SUPPLIER']) &&
+    hasValue_(data['DETAILED BID EVALUATION']) &&
+    hasValue_(data['POST-QUALIFICATION']) &&
+    hasValue_(data['NOA DATE']) &&
+    hasValue_(data['NTP DATE']) &&
+    hasValue_(data['DATE PREPARED (PO)']) &&
+    hasValue_(data['PO NO.']) &&
+    hasValue_(data['PO TOTAL COST'])
+  ) {
+    return 'Purchase Order';
+  }
+
+  return '';
 }
 
 
