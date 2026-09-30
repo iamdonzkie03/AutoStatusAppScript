@@ -557,8 +557,11 @@ function determineAutomaticStatusFromData_(data, displayData) {
     eligibilityDate.getTime() > today.getTime() &&
     submissionDate.getTime() > today.getTime();
 
-  // Cancelled/realigned statuses are checked before the normal
-  // procurement progression.
+  /*
+   * ------------------------------------------------------------
+   * SPECIAL TERMINAL / MANUAL STATUSES
+   * ------------------------------------------------------------
+   */
   if (
     textEquals_(data['REMARKS'], 'Cancelled PR') &&
     isZero_(data['PR TOTAL ABC'], displayData['PR TOTAL ABC'])
@@ -608,6 +611,14 @@ function determineAutomaticStatusFromData_(data, displayData) {
     if (realigned) return 'Realigned Item';
   }
 
+  /*
+   * ------------------------------------------------------------
+   * COMMON REQUIRED FIELDS
+   *
+   * A status is assigned only after the fields required to establish
+   * that status have actually been entered.
+   * ------------------------------------------------------------
+   */
   const basicConditionsMet =
     hasValue_(data['TOTAL ABC']) &&
     hasValue_(data['PR NO.']) &&
@@ -622,51 +633,20 @@ function determineAutomaticStatusFromData_(data, displayData) {
     hasValue_(data['PROJECT TITLE']) &&
     hasValue_(data['PROCUREMENT METHOD']);
 
-  if (
-    basicConditionsMet &&
-    postingIsBeforeOrToday === true &&
-    activeDateCondition === true &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
-  ) {
-    return 'Active';
+  if (!basicConditionsMet) {
+    return '';
   }
 
+  /*
+   * ------------------------------------------------------------
+   * PURCHASE ORDER
+   *
+   * Check the most advanced state first. Otherwise the generic
+   * Active rule would capture rows whose eligibility/submission
+   * dates are still in the future.
+   * ------------------------------------------------------------
+   */
   if (
-    basicConditionsMet &&
-    closedDateCondition &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
-  ) {
-    return 'Closed';
-  }
-
-  if (
-    basicConditionsMet &&
-    futureEligibilityAndBids &&
-    hasValue_(data['BAC RESOLUTION NO.']) &&
-    isBlankValue_(data['SUPPLIER'], displayData['SUPPLIER']) &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
-  ) {
-    return 'Failed';
-  }
-
-  if (
-    basicConditionsMet &&
-    futureEligibilityAndBids &&
-    hasValue_(data['BAC RESOLUTION NO.']) &&
-    hasValue_(data['SUPPLIER']) &&
-    hasValue_(data['DETAILED BID EVALUATION']) &&
-    hasValue_(data['POST-QUALIFICATION']) &&
-    hasValue_(data['NOA DATE']) &&
-    hasValue_(data['NTP DATE']) &&
-    isBlankValue_(data['DATE PREPARED (PO)'], displayData['DATE PREPARED (PO)']) &&
-    isBlankValue_(data['PO NO.'], displayData['PO NO.']) &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
-  ) {
-    return 'Awarded';
-  }
-
-  if (
-    basicConditionsMet &&
     futureEligibilityAndBids &&
     hasValue_(data['BAC RESOLUTION NO.']) &&
     hasValue_(data['SUPPLIER']) &&
@@ -681,10 +661,74 @@ function determineAutomaticStatusFromData_(data, displayData) {
     return 'Purchase Order';
   }
 
+  /*
+   * ------------------------------------------------------------
+   * AWARDED
+   * ------------------------------------------------------------
+   */
+  if (
+    futureEligibilityAndBids &&
+    hasValue_(data['BAC RESOLUTION NO.']) &&
+    hasValue_(data['SUPPLIER']) &&
+    hasValue_(data['DETAILED BID EVALUATION']) &&
+    hasValue_(data['POST-QUALIFICATION']) &&
+    hasValue_(data['NOA DATE']) &&
+    hasValue_(data['NTP DATE']) &&
+    isBlankValue_(data['DATE PREPARED (PO)'], displayData['DATE PREPARED (PO)']) &&
+    isBlankValue_(data['PO NO.'], displayData['PO NO.']) &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Awarded';
+  }
+
+  /*
+   * ------------------------------------------------------------
+   * FAILED
+   * ------------------------------------------------------------
+   */
+  if (
+    futureEligibilityAndBids &&
+    hasValue_(data['BAC RESOLUTION NO.']) &&
+    isBlankValue_(data['SUPPLIER'], displayData['SUPPLIER']) &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Failed';
+  }
+
+  /*
+   * ------------------------------------------------------------
+   * CLOSED
+   *
+   * Both Eligibility Screening and Submission of Bids must be
+   * strictly before today.
+   * ------------------------------------------------------------
+   */
+  if (
+    closedDateCondition &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Closed';
+  }
+
+  /*
+   * ------------------------------------------------------------
+   * ACTIVE
+   *
+   * Either Eligibility Screening or Submission of Bids may be
+   * today or later. This is deliberately checked AFTER the
+   * advanced future-date states above.
+   * ------------------------------------------------------------
+   */
+  if (
+    postingIsBeforeOrToday === true &&
+    activeDateCondition === true &&
+    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+  ) {
+    return 'Active';
+  }
+
   return '';
 }
-
-
 /* ============================================================
  * AUTOMATIC OPEN TRIGGER
  * ============================================================ */
