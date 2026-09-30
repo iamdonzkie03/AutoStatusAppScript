@@ -365,11 +365,10 @@ function setupValidator() {
     throw new Error('Sheet "' + CONFIG.SHEET_NAME + '" was not found.');
   }
 
-  // Remove legacy/competing validator triggers.
-  // Automatic STATUS calculation is intentionally handled only by the
-  // simple onEdit(e) trigger so every editor gets the same behavior.
+  // Remove all previous status/validator triggers created by this project.
   ScriptApp.getProjectTriggers().forEach(trigger => {
     const handler = trigger.getHandlerFunction();
+
     if (
       handler === 'validatorOnEdit' ||
       handler === 'validatorOnOpen' ||
@@ -379,20 +378,40 @@ function setupValidator() {
     }
   });
 
-  // Only the refresh-on-open handler remains installable.
-  // It is not part of the edit-time STATUS engine.
+  /*
+   * INSTALLABLE EDIT TRIGGER
+   *
+   * This is the production STATUS engine.
+   *
+   * Installable triggers run when other editors modify the spreadsheet
+   * and execute using the authorization of the account that installed
+   * the trigger. No editor needs to install their own trigger.
+   *
+   * IMPORTANT: this handler performs NO modal/UI operation.
+   */
+  ScriptApp.newTrigger('validatorOnEdit')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
+  /*
+   * OPEN REFRESH
+   *
+   * Recalculates statuses when the spreadsheet is opened, which also
+   * handles statuses that change merely because the calendar date changed.
+   */
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
     .create();
 
-  // Refresh existing rows immediately.
+  // Refresh all existing rows immediately.
   refreshAllStatuses_(sheet);
 
   SpreadsheetApp.flush();
 
   ss.toast(
-    'Automatic STATUS is enabled for all editors. Validation is separated from the edit-time status engine.',
+    'Automatic STATUS engine installed for all editors.',
     'Validator',
     5
   );
@@ -406,35 +425,14 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  // Simple triggers run in the context of the user who edited the sheet.
-  // Keep this path lightweight and use it ONLY for automatic STATUS
-  // calculation so shared editors do not depend on the trigger owner's
-  // authorization.
-  try {
-    if (!e || !e.range) return;
-
-    const range = e.range;
-    const sheet = range.getSheet();
-
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-    if (range.getRow() <= CONFIG.HEADER_ROW) return;
-
-    const headers = getHeaders_(sheet);
-    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-
-    if (statusColumn <= 0) return;
-
-    const firstRow = range.getRow();
-    const lastRow = firstRow + range.getNumRows() - 1;
-
-    for (let row = firstRow; row <= lastRow; row++) {
-      updateAutomaticStatusFast_(sheet, row, headers, statusColumn);
-    }
-  } catch (error) {
-    console.error('onEdit status engine error:', error);
-  }
+  /*
+   * Intentionally empty.
+   *
+   * Automatic STATUS is handled by the installable validatorOnEdit
+   * trigger created by setupValidator(). Keeping this simple trigger
+   * empty prevents duplicate status writes/races.
+   */
 }
-
 
 /* ============================================================
  * SIMPLE ON OPEN - STATUS ENGINE
@@ -730,10 +728,30 @@ function refreshAllStatuses_(sheet) {
  * ============================================================ */
 
 function validatorOnEdit(e) {
-  // Deprecated. Automatic STATUS calculation is handled exclusively by
-  // the simple onEdit(e) trigger. This function intentionally does nothing
-  // so an old installable trigger cannot compete with the status engine.
-  return;
+  try {
+    if (!e || !e.range) return;
+
+    const range = e.range;
+    const sheet = range.getSheet();
+
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+    if (range.getRow() <= CONFIG.HEADER_ROW) return;
+
+    const headers = getHeaders_(sheet);
+    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+
+    if (statusColumn <= 0) return;
+
+    const firstRow = range.getRow();
+    const lastRow = firstRow + range.getNumRows() - 1;
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      updateAutomaticStatusFast_(sheet, row, headers, statusColumn);
+    }
+
+  } catch (error) {
+    console.error('validatorOnEdit status engine error:', error);
+  }
 }
 /* ============================================================
  * AUTOMATIC STATUS DETERMINATION
