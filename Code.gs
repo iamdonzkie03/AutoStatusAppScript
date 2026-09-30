@@ -350,7 +350,7 @@ function isAcceptedValue_(field, value, displayValue) {
  *
  * RUN THIS FUNCTION ONE TIME MANUALLY.
  *
- * It creates an installable onEdit trigger.
+ * It creates the installable onEdit and onOpen triggers.
  *
  * No menu is created.
  * ============================================================ */
@@ -379,12 +379,19 @@ function setupValidator() {
   });
 
   /*
-   * No installable edit trigger is created.
+   * INSTALLABLE EDIT TRIGGER
    *
-   * Automatic STATUS is handled by the built-in onEdit(e) above.
-   * This makes STATUS updates independent of trigger installation
-   * and available to every editor of the bound spreadsheet.
+   * Use an installable trigger as the primary status engine. This
+   * executes under the authorization of the spreadsheet owner/script
+   * installer and therefore works consistently when other editors
+   * modify the Data List sheet.
+   *
+   * The built-in onEdit(e) remains as a fallback for the owner.
    */
+  ScriptApp.newTrigger('validatorOnEdit')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
 
   /*
    * OPEN REFRESH
@@ -420,9 +427,9 @@ function onEdit(e) {
   /*
    * BUILT-IN EDIT TRIGGER
    *
-   * This is the primary automatic STATUS engine.
-   * It fires automatically for every editor of the spreadsheet.
-   * No per-editor trigger installation is required.
+   * This is the built-in fallback automatic STATUS engine.
+   * The installable validatorOnEdit trigger created by setupValidator()
+   * is the primary engine for consistent multi-editor execution.
    *
    * This handler performs spreadsheet-only operations and does not
    * open dialogs or call services that require authorization.
@@ -864,23 +871,39 @@ function validatorOnEdit(e) {
     const range = e.range;
     const sheet = range.getSheet();
 
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-    if (range.getRow() <= CONFIG.HEADER_ROW) return;
+    if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
+
+    const firstRow = Math.max(
+      range.getRow(),
+      CONFIG.HEADER_ROW + 1
+    );
+    const lastRow =
+      range.getRow() + range.getNumRows() - 1;
+
+    if (lastRow < firstRow) return;
 
     const headers = getHeaders_(sheet);
-    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+    const statusColumn =
+      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
 
     if (statusColumn <= 0) return;
 
-    const firstRow = range.getRow();
-    const lastRow = firstRow + range.getNumRows() - 1;
-
     for (let row = firstRow; row <= lastRow; row++) {
-      updateAutomaticStatusFast_(sheet, row, headers, statusColumn);
+      updateAutomaticStatusFast_(
+        sheet,
+        row,
+        headers,
+        statusColumn
+      );
     }
 
+    SpreadsheetApp.flush();
+
   } catch (error) {
-    console.error('validatorOnEdit status engine error:', error);
+    console.error(
+      'validatorOnEdit STATUS error:',
+      error && error.stack ? error.stack : error
+    );
   }
 }
 /* ============================================================
