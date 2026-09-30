@@ -536,6 +536,18 @@ function updateAutomaticStatusFast_(sheet, row, headers, statusColumn) {
  * so it never performs one getRange() call per field.
  */
 function determineAutomaticStatusFromData_(data, displayData) {
+  /*
+   * Automatic STATUS is evaluated from the individual requirements
+   * of each status. There is intentionally NO shared/common-field
+   * gate here.
+   *
+   * This is important because users enter procurement information
+   * progressively. As soon as the row satisfies one complete status
+   * definition, STATUS is assigned automatically.
+   *
+   * Priority is from the most specific/advanced state to the
+   * general procurement states.
+   */
   const rowHasAnyData = Object.keys(data).some(function(header) {
     return header !== CONFIG.STATUS_HEADER && hasValue_(data[header]);
   });
@@ -587,104 +599,54 @@ function determineAutomaticStatusFromData_(data, displayData) {
 
   /*
    * ------------------------------------------------------------
-   * SPECIAL TERMINAL / MANUAL STATUSES
+   * MANUAL / TERMINAL STATUSES
    * ------------------------------------------------------------
    */
+
   if (
-    textEquals_(data['REMARKS'], 'Cancelled PR') &&
-    isZero_(data['PR TOTAL ABC'], displayData['PR TOTAL ABC'])
+    automaticStatusRulesSatisfied_(
+      'Cancelled PR',
+      data,
+      displayData
+    )
   ) {
     return 'Cancelled PR';
   }
 
   if (
-    textEquals_(data['REMARKS'], 'Cancelled PO') &&
-    hasValue_(data['PO NO.']) &&
-    !hasValue_(data['PO TOTAL COST'])
+    automaticStatusRulesSatisfied_(
+      'Cancelled PO',
+      data,
+      displayData
+    )
   ) {
     return 'Cancelled PO';
   }
 
   if (
-    isZero_(data['TOTAL ABC'], displayData['TOTAL ABC']) &&
-    isZero_(data['PR TOTAL ABC'], displayData['PR TOTAL ABC']) &&
-    hasValue_(data['PR NO.'])
+    automaticStatusRulesSatisfied_(
+      'Realigned Item',
+      data,
+      displayData
+    )
   ) {
-    const realignmentFields = [
-      'PRE-PROCUREMENT CONFERENCE',
-      'POSTING DATE',
-      'PHILGEPS REFERENCE NO.',
-      'PROJECT ID',
-      'PRE-BID CONFERENCE',
-      'ELIGIBILITY SCREENING',
-      'SUBMISSION OF BIDS',
-      'DETAILED BID EVALUATION',
-      'POST-QUALIFICATION',
-      'NOA DATE',
-      'NTP DATE',
-      'BAC RESOLUTION NO.',
-      'SUPPLIER',
-      'DATE PREPARED (PO)',
-      'PO NO.',
-      'PO TOTAL COST',
-      'PROJECT TITLE',
-      'PROCUREMENT METHOD',
-      'REMARKS'
-    ];
-
-    const realigned = realignmentFields.every(function(field) {
-      return isBlankValue_(data[field], displayData[field]);
-    });
-
-    if (realigned) return 'Realigned Item';
-  }
-
-  /*
-   * ------------------------------------------------------------
-   * COMMON REQUIRED FIELDS
-   *
-   * A status is assigned only after the fields required to establish
-   * that status have actually been entered.
-   * ------------------------------------------------------------
-   */
-  const basicConditionsMet =
-    hasValue_(data['TOTAL ABC']) &&
-    hasValue_(data['PR NO.']) &&
-    hasValue_(data['PR TOTAL ABC']) &&
-    hasValue_(data['PRE-PROCUREMENT CONFERENCE']) &&
-    hasValue_(data['POSTING DATE']) &&
-    hasValue_(data['PHILGEPS REFERENCE NO.']) &&
-    hasValue_(data['PROJECT ID']) &&
-    hasValue_(data['PRE-BID CONFERENCE']) &&
-    hasValue_(data['ELIGIBILITY SCREENING']) &&
-    hasValue_(data['SUBMISSION OF BIDS']) &&
-    hasValue_(data['PROJECT TITLE']) &&
-    hasValue_(data['PROCUREMENT METHOD']);
-
-  if (!basicConditionsMet) {
-    return '';
+    return 'Realigned Item';
   }
 
   /*
    * ------------------------------------------------------------
    * PURCHASE ORDER
    *
-   * Check the most advanced state first. Otherwise the generic
-   * Active rule would capture rows whose eligibility/submission
-   * dates are still in the future.
+   * Most specific downstream state is checked first.
    * ------------------------------------------------------------
    */
   if (
     futureEligibilityAndBids &&
-    hasValue_(data['BAC RESOLUTION NO.']) &&
-    hasValue_(data['SUPPLIER']) &&
-    hasValue_(data['DETAILED BID EVALUATION']) &&
-    hasValue_(data['POST-QUALIFICATION']) &&
-    hasValue_(data['NOA DATE']) &&
-    hasValue_(data['NTP DATE']) &&
-    hasValue_(data['DATE PREPARED (PO)']) &&
-    hasValue_(data['PO NO.']) &&
-    hasValue_(data['PO TOTAL COST'])
+    automaticStatusRulesSatisfied_(
+      'Purchase Order',
+      data,
+      displayData
+    )
   ) {
     return 'Purchase Order';
   }
@@ -696,15 +658,11 @@ function determineAutomaticStatusFromData_(data, displayData) {
    */
   if (
     futureEligibilityAndBids &&
-    hasValue_(data['BAC RESOLUTION NO.']) &&
-    hasValue_(data['SUPPLIER']) &&
-    hasValue_(data['DETAILED BID EVALUATION']) &&
-    hasValue_(data['POST-QUALIFICATION']) &&
-    hasValue_(data['NOA DATE']) &&
-    hasValue_(data['NTP DATE']) &&
-    isBlankValue_(data['DATE PREPARED (PO)'], displayData['DATE PREPARED (PO)']) &&
-    isBlankValue_(data['PO NO.'], displayData['PO NO.']) &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+    automaticStatusRulesSatisfied_(
+      'Awarded',
+      data,
+      displayData
+    )
   ) {
     return 'Awarded';
   }
@@ -716,9 +674,11 @@ function determineAutomaticStatusFromData_(data, displayData) {
    */
   if (
     futureEligibilityAndBids &&
-    hasValue_(data['BAC RESOLUTION NO.']) &&
-    isBlankValue_(data['SUPPLIER'], displayData['SUPPLIER']) &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+    automaticStatusRulesSatisfied_(
+      'Failed',
+      data,
+      displayData
+    )
   ) {
     return 'Failed';
   }
@@ -726,14 +686,15 @@ function determineAutomaticStatusFromData_(data, displayData) {
   /*
    * ------------------------------------------------------------
    * CLOSED
-   *
-   * Both Eligibility Screening and Submission of Bids must be
-   * strictly before today.
    * ------------------------------------------------------------
    */
   if (
     closedDateCondition &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+    automaticStatusRulesSatisfied_(
+      'Closed',
+      data,
+      displayData
+    )
   ) {
     return 'Closed';
   }
@@ -742,21 +703,118 @@ function determineAutomaticStatusFromData_(data, displayData) {
    * ------------------------------------------------------------
    * ACTIVE
    *
-   * Either Eligibility Screening or Submission of Bids may be
-   * today or later. This is deliberately checked AFTER the
-   * advanced future-date states above.
+   * Active is intentionally different from the other date states:
+   * either Eligibility Screening OR Submission of Bids being today
+   * or later is enough to establish the Active date condition.
    * ------------------------------------------------------------
    */
   if (
     postingIsBeforeOrToday === true &&
     activeDateCondition === true &&
-    isZero_(data['PO TOTAL COST'], displayData['PO TOTAL COST'])
+    automaticStatusRulesSatisfied_(
+      'Active',
+      data,
+      displayData,
+      {
+        ignoreFields: [
+          'ELIGIBILITY SCREENING',
+          'SUBMISSION OF BIDS'
+        ]
+      }
+    )
   ) {
     return 'Active';
   }
 
   return '';
 }
+
+
+/*
+ * Check the requirements belonging to ONE status.
+ *
+ * This replaces the old shared "basicConditionsMet" gate.
+ * Every status is now evaluated independently.
+ *
+ * For automatic STATUS calculation we check whether the values
+ * satisfy the structural requirement. Detailed format/error
+ * reporting remains the responsibility of validateRow_().
+ */
+function automaticStatusRulesSatisfied_(
+  status,
+  data,
+  displayData,
+  options
+) {
+  const rules = STATUS_RULES[status];
+  if (!rules) return false;
+
+  const ignored = new Set(
+    (options && options.ignoreFields) || []
+  );
+
+  return Object.keys(rules).every(function(field) {
+    if (ignored.has(field)) return true;
+
+    const rule = rules[field];
+    const value = data[field];
+    const displayValue = displayData[field];
+
+    if (rule === 'required') {
+      return (
+        isAcceptedValue_(field, value, displayValue) ||
+        !isBlankValue_(value, displayValue)
+      );
+    }
+
+    if (rule === 'blank') {
+      return isBlankValue_(value, displayValue);
+    }
+
+    if (rule === 'zero') {
+      return isZero_(value, displayValue);
+    }
+
+    if (rule === 'before') {
+      if (isAcceptedValue_(field, value, displayValue)) {
+        return true;
+      }
+
+      const date = normalizeDate_(value);
+      const today = normalizeDate_(new Date());
+
+      return (
+        !!date &&
+        date.getTime() < today.getTime()
+      );
+    }
+
+    if (rule === 'after') {
+      if (isAcceptedValue_(field, value, displayValue)) {
+        return true;
+      }
+
+      const date = normalizeDate_(value);
+      const today = normalizeDate_(new Date());
+
+      return (
+        !!date &&
+        date.getTime() >= today.getTime()
+      );
+    }
+
+    if (rule.indexOf('exact:') === 0) {
+      return (
+        normalizeText_(displayValue) ===
+        rule.substring(6)
+      );
+    }
+
+    return true;
+  });
+}
+
+
 /* ============================================================
  * AUTOMATIC OPEN TRIGGER
  * ============================================================ */
