@@ -350,7 +350,7 @@ function isAcceptedValue_(field, value, displayValue) {
  *
  * RUN THIS FUNCTION ONE TIME MANUALLY.
  *
- * It creates the installable onEdit and onOpen triggers.
+ * It creates an installable onEdit trigger.
  *
  * No menu is created.
  * ============================================================ */
@@ -365,10 +365,9 @@ function setupValidator() {
     throw new Error('Sheet "' + CONFIG.SHEET_NAME + '" was not found.');
   }
 
-  // Remove all previous status/validator triggers created by this project.
+  // Remove only triggers created by this validator.
   ScriptApp.getProjectTriggers().forEach(trigger => {
     const handler = trigger.getHandlerFunction();
-
     if (
       handler === 'validatorOnEdit' ||
       handler === 'validatorOnOpen' ||
@@ -378,43 +377,31 @@ function setupValidator() {
     }
   });
 
-  /*
-   * INSTALLABLE EDIT TRIGGER
-   *
-   * Use an installable trigger as the primary status engine. This
-   * executes under the authorization of the spreadsheet owner/script
-   * installer and therefore works consistently when other editors
-   * modify the Data List sheet.
-   *
-   * The built-in onEdit(e) remains as a fallback for the owner.
-   */
+  // The installable edit trigger is the single source of truth for both
+  // automatic STATUS calculation and validation. This prevents two edit
+  // handlers from racing or producing opposite/stale results.
   ScriptApp.newTrigger('validatorOnEdit')
     .forSpreadsheet(ss)
     .onEdit()
     .create();
 
-  /*
-   * OPEN REFRESH
-   *
-   * Recalculates statuses when the spreadsheet is opened, which also
-   * handles statuses that change merely because the calendar date changed.
-   */
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
     .create();
 
-  // Refresh all existing rows immediately.
+  // Refresh immediately.
   refreshAllStatuses_(sheet);
 
   SpreadsheetApp.flush();
 
   ss.toast(
-    'Automatic STATUS engine installed for all editors.',
+    'Validator installed. Status calculation is now independent from the validation modal.',
     'Validator',
     5
   );
 }
+
 
 /* ============================================================
  * SIMPLE ON EDIT - STATUS ENGINE
@@ -424,50 +411,10 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  /*
-   * BUILT-IN EDIT TRIGGER
-   *
-   * This is the built-in fallback automatic STATUS engine.
-   * The installable validatorOnEdit trigger created by setupValidator()
-   * is the primary engine for consistent multi-editor execution.
-   *
-   * This handler performs spreadsheet-only operations and does not
-   * open dialogs or call services that require authorization.
-   */
-  try {
-    if (!e || !e.range) return;
-
-    const range = e.range;
-    const sheet = range.getSheet();
-
-    if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
-
-    const firstRow = Math.max(
-      range.getRow(),
-      CONFIG.HEADER_ROW + 1
-    );
-    const lastRow = range.getRow() + range.getNumRows() - 1;
-
-    if (lastRow < firstRow) return;
-
-    const headers = getHeaders_(sheet);
-    const statusColumn =
-      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-
-    if (statusColumn <= 0) return;
-
-    for (let row = firstRow; row <= lastRow; row++) {
-      updateAutomaticStatusFast_(
-        sheet,
-        row,
-        headers,
-        statusColumn
-      );
-    }
-  } catch (error) {
-    console.error('onEdit STATUS error:', error);
-  }
+  // Intentionally empty. All edit processing is handled by the
+  // installable validatorOnEdit trigger created by setupValidator().
 }
+
 
 /* ============================================================
  * SIMPLE ON OPEN - STATUS ENGINE
@@ -483,46 +430,13 @@ function onOpen(e) {
  * ============================================================ */
 
 function updateRowStatus_(sheet, row, headers, statusColumn) {
-  updateAutomaticStatusFast_(sheet, row, headers, statusColumn);
-}
-
-/**
- * Fast automatic status engine used by the simple onEdit trigger.
- *
- * This intentionally does not validate the row and does not open any UI.
- * It only determines and writes the automatic procurement status.
- */
-function updateAutomaticStatusFast_(sheet, row, headers, statusColumn) {
   if (row <= CONFIG.HEADER_ROW) return;
 
-  const lastColumn = sheet.getLastColumn();
-
-  // One read for the entire row.
-  const rowValues = sheet
-    .getRange(row, 1, 1, lastColumn)
-    .getValues()[0];
-
-  const rowDisplayValues = sheet
-    .getRange(row, 1, 1, lastColumn)
-    .getDisplayValues()[0];
-
-  const data = {};
-  const displayData = {};
-
-  headers.forEach((header, index) => {
-    if (!header) return;
-    data[header] = rowValues[index];
-    displayData[header] = rowDisplayValues[index];
-  });
-
-  const automaticStatus = determineAutomaticStatusFromData_(
-    data,
-    displayData
-  );
-
   const statusCell = sheet.getRange(row, statusColumn);
+  const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
   const currentStatus = normalizeText_(statusCell.getDisplayValue());
 
+  // If the row contains no procurement data, STATUS must be cleared.
   if (!automaticStatus) {
     if (currentStatus !== '') {
       statusCell.clearContent();
@@ -533,353 +447,6 @@ function updateAutomaticStatusFast_(sheet, row, headers, statusColumn) {
   if (currentStatus !== automaticStatus) {
     statusCell.setValue(automaticStatus);
   }
-}
-
-/**
- * Shared data-only status calculation.
- *
- * The existing determineAutomaticStatus_() remains available for the
- * validation/legacy path. The simple-trigger path uses this function
- * so it never performs one getRange() call per field.
- */
-function determineAutomaticStatusFromData_(data, displayData) {
-  /*
-   * Automatic STATUS is evaluated from the individual requirements
-   * of each status. There is intentionally NO shared/common-field
-   * gate here.
-   *
-   * This is important because users enter procurement information
-   * progressively. As soon as the row satisfies one complete status
-   * definition, STATUS is assigned automatically.
-   *
-   * Priority is from the most specific/advanced state to the
-   * general procurement states.
-   */
-  const rowHasAnyData = Object.keys(data).some(function(header) {
-    return header !== CONFIG.STATUS_HEADER && hasValue_(data[header]);
-  });
-
-  if (!rowHasAnyData) return '';
-
-  const today = normalizeDate_(new Date());
-
-  const postingDate = isNAValue_('', displayData['POSTING DATE'])
-    ? null
-    : normalizeDate_(data['POSTING DATE']);
-
-  const eligibilityDate = isNAValue_('', displayData['ELIGIBILITY SCREENING'])
-    ? null
-    : normalizeDate_(data['ELIGIBILITY SCREENING']);
-
-  const submissionDate = isNAValue_('', displayData['SUBMISSION OF BIDS'])
-    ? null
-    : normalizeDate_(data['SUBMISSION OF BIDS']);
-
-  const postingIsBeforeOrToday =
-    postingDate && postingDate.getTime() <= today.getTime();
-
-  const eligibilityIsBeforeToday =
-    eligibilityDate && eligibilityDate.getTime() < today.getTime();
-
-  const submissionIsBeforeToday =
-    submissionDate && submissionDate.getTime() < today.getTime();
-
-  const eligibilityIsTodayOrAfter =
-    eligibilityDate && eligibilityDate.getTime() >= today.getTime();
-
-  const submissionIsTodayOrAfter =
-    submissionDate && submissionDate.getTime() >= today.getTime();
-
-  const activeDateCondition =
-    eligibilityIsTodayOrAfter === true ||
-    submissionIsTodayOrAfter === true;
-
-  const closedDateCondition =
-    eligibilityIsBeforeToday === true &&
-    submissionIsBeforeToday === true;
-
-  const futureEligibilityAndBids =
-    eligibilityDate &&
-    submissionDate &&
-    eligibilityDate.getTime() > today.getTime() &&
-    submissionDate.getTime() > today.getTime();
-
-  /*
-   * ------------------------------------------------------------
-   * MANUAL / TERMINAL STATUSES
-   * ------------------------------------------------------------
-   */
-
-  if (
-    automaticStatusRulesSatisfied_(
-      'Cancelled PR',
-      data,
-      displayData
-    )
-  ) {
-    return 'Cancelled PR';
-  }
-
-  if (
-    automaticStatusRulesSatisfied_(
-      'Cancelled PO',
-      data,
-      displayData
-    )
-  ) {
-    return 'Cancelled PO';
-  }
-
-  if (
-    automaticStatusRulesSatisfied_(
-      'Realigned Item',
-      data,
-      displayData
-    )
-  ) {
-    return 'Realigned Item';
-  }
-
-  /*
-   * ------------------------------------------------------------
-   * PURCHASE ORDER
-   *
-   * Most specific downstream state is checked first.
-   * ------------------------------------------------------------
-   */
-  if (
-    futureEligibilityAndBids &&
-    automaticStatusRulesSatisfied_(
-      'Purchase Order',
-      data,
-      displayData
-    )
-  ) {
-    return 'Purchase Order';
-  }
-
-  /*
-   * ------------------------------------------------------------
-   * AWARDED
-   * ------------------------------------------------------------
-   */
-  if (
-    futureEligibilityAndBids &&
-    automaticStatusRulesSatisfied_(
-      'Awarded',
-      data,
-      displayData
-    )
-  ) {
-    return 'Awarded';
-  }
-
-  /*
-   * ------------------------------------------------------------
-   * FAILED
-   * ------------------------------------------------------------
-   */
-  if (
-    futureEligibilityAndBids &&
-    automaticStatusRulesSatisfied_(
-      'Failed',
-      data,
-      displayData
-    )
-  ) {
-    return 'Failed';
-  }
-
-  /*
-   * ------------------------------------------------------------
-   * CLOSED
-   * ------------------------------------------------------------
-   */
-  if (
-    closedDateCondition &&
-    automaticStatusRulesSatisfied_(
-      'Closed',
-      data,
-      displayData
-    )
-  ) {
-    return 'Closed';
-  }
-
-  /*
-   * ------------------------------------------------------------
-   * ACTIVE
-   *
-   * Active is intentionally different from the other date states:
-   * either Eligibility Screening OR Submission of Bids being today
-   * or later is enough to establish the Active date condition.
-   * ------------------------------------------------------------
-   */
-  if (
-    postingIsBeforeOrToday === true &&
-    activeDateCondition === true &&
-    automaticStatusRulesSatisfied_(
-      'Active',
-      data,
-      displayData,
-      {
-        ignoreFields: [
-          'ELIGIBILITY SCREENING',
-          'SUBMISSION OF BIDS'
-        ]
-      }
-    )
-  ) {
-    return 'Active';
-  }
-
-  return '';
-}
-
-
-/*
- * Check the requirements belonging to ONE status.
- *
- * This replaces the old shared "basicConditionsMet" gate.
- * Every status is now evaluated independently.
- *
- * For automatic STATUS calculation we check whether the values
- * satisfy the structural requirement. Detailed format/error
- * reporting remains the responsibility of validateRow_().
- */
-function automaticStatusRulesSatisfied_(
-  status,
-  data,
-  displayData,
-  options
-) {
-  const rules = STATUS_RULES[status];
-  if (!rules) return false;
-
-  const ignored = new Set(
-    (options && options.ignoreFields) || []
-  );
-
-  return Object.keys(rules).every(function(field) {
-    if (ignored.has(field)) return true;
-
-    const rule = rules[field];
-    const value = data[field];
-    const displayValue = displayData[field];
-    const fieldFormat = FIELD_FORMATS[field];
-
-    // A required value must not merely be nonblank. Numeric and date
-    // fields must also have a valid format. This prevents malformed
-    // entries from silently creating a STATUS.
-    if (rule === 'required') {
-      if (isAcceptedValue_(field, value, displayValue)) {
-        return true;
-      }
-
-      if (isBlankValue_(value, displayValue)) {
-        return false;
-      }
-
-      return isAutomaticFormatValid_(
-        field,
-        value,
-        displayValue,
-        fieldFormat
-      );
-    }
-
-    if (rule === 'blank') {
-      return isBlankValue_(value, displayValue);
-    }
-
-    if (rule === 'zero') {
-      return isZero_(value, displayValue);
-    }
-
-    if (rule === 'before') {
-      if (isAcceptedValue_(field, value, displayValue)) {
-        return true;
-      }
-
-      if (!isAutomaticFormatValid_(
-        field,
-        value,
-        displayValue,
-        'date'
-      )) {
-        return false;
-      }
-
-      const date = normalizeDate_(value);
-      const today = normalizeDate_(new Date());
-
-      return (
-        !!date &&
-        date.getTime() < today.getTime()
-      );
-    }
-
-    if (rule === 'after') {
-      if (isAcceptedValue_(field, value, displayValue)) {
-        return true;
-      }
-
-      if (!isAutomaticFormatValid_(
-        field,
-        value,
-        displayValue,
-        'date'
-      )) {
-        return false;
-      }
-
-      const date = normalizeDate_(value);
-      const today = normalizeDate_(new Date());
-
-      return (
-        !!date &&
-        date.getTime() >= today.getTime()
-      );
-    }
-
-    if (rule.indexOf('exact:') === 0) {
-      return (
-        normalizeText_(displayValue) ===
-        rule.substring(6)
-      );
-    }
-
-    return true;
-  });
-}
-
-/**
- * Automatic status format check.
- *
- * Unlike validateFormat_(), this helper never creates UI and can safely
- * run from both simple and installable edit triggers.
- */
-function isAutomaticFormatValid_(
-  field,
-  value,
-  displayValue,
-  format
-) {
-  if (!format) return true;
-
-  if (format === 'numeric') {
-    return isNumeric_(value, displayValue);
-  }
-
-  if (format === 'date') {
-    return isValidDateValue_(value, displayValue);
-  }
-
-  if (format === 'text') {
-    return isTextValue_(displayValue);
-  }
-
-  return true;
 }
 
 
@@ -931,42 +498,42 @@ function validatorOnEdit(e) {
 
     const range = e.range;
     const sheet = range.getSheet();
-
-    if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
-
-    const firstRow = Math.max(
-      range.getRow(),
-      CONFIG.HEADER_ROW + 1
-    );
-    const lastRow =
-      range.getRow() + range.getNumRows() - 1;
-
-    if (lastRow < firstRow) return;
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+    if (range.getRow() <= CONFIG.HEADER_ROW) return;
 
     const headers = getHeaders_(sheet);
-    const statusColumn =
-      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-
+    const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
     if (statusColumn <= 0) return;
 
+    const firstRow = range.getRow();
+    const lastRow = firstRow + range.getNumRows() - 1;
+    const allErrors = [];
+
     for (let row = firstRow; row <= lastRow; row++) {
-      updateAutomaticStatusFast_(
-        sheet,
-        row,
-        headers,
-        statusColumn
-      );
+      const statusCell = sheet.getRange(row, statusColumn);
+      const oldStatus = normalizeText_(statusCell.getDisplayValue());
+      const automaticStatus = determineAutomaticStatus_(sheet, row, headers);
+
+      if (!automaticStatus) {
+        if (oldStatus !== '') statusCell.clearContent();
+        continue;
+      }
+
+      if (oldStatus === automaticStatus) continue;
+
+      statusCell.setValue(automaticStatus);
+      SpreadsheetApp.flush();
+
+      const rowErrors = validateRow_(sheet, row, headers, automaticStatus);
+      rowErrors.forEach(error => allErrors.push(error));
     }
 
-    SpreadsheetApp.flush();
-
+    if (allErrors.length > 0) showValidationModal_(allErrors);
   } catch (error) {
-    console.error(
-      'validatorOnEdit STATUS error:',
-      error && error.stack ? error.stack : error
-    );
+    console.error('validatorOnEdit error:', error);
   }
 }
+
 /* ============================================================
  * AUTOMATIC STATUS DETERMINATION
  * ============================================================ */
@@ -977,26 +544,23 @@ function determineAutomaticStatus_(
   headers
 ) {
 
-  // Read the entire edited row in ONE spreadsheet call for values and
-  // ONE call for display values. The previous implementation called
-  // getRange().getValue() separately for every column, which made each
-  // edit unnecessarily slow.
-  const lastColumn = sheet.getLastColumn();
-  const rowValues = sheet
-    .getRange(row, 1, 1, lastColumn)
-    .getValues()[0];
-  const rowDisplayValues = sheet
-    .getRange(row, 1, 1, lastColumn)
-    .getDisplayValues()[0];
-
   const data = {};
-  const displayData = {};
 
-  headers.forEach((header, index) => {
-    if (!header) return;
-    data[header] = rowValues[index];
-    displayData[header] = rowDisplayValues[index];
-  });
+  headers.forEach(
+    (header, index) => {
+
+      if (!header) return;
+
+      data[header] =
+        sheet
+          .getRange(
+            row,
+            index + 1
+          )
+          .getValue();
+
+    }
+  );
 
 
   // Keep STATUS blank when the entire procurement row has no data.
@@ -2237,390 +1801,6 @@ function normalizeText_(value) {
 
 }
 
-
-/* ============================================================
- * DIAGNOSTIC / HEALTH CHECK
- *
- * Run diagnoseActiveRow() manually from the Apps Script editor.
- * It does NOT create a menu and does NOT modify procurement data.
- *
- * The dialog reports:
- *   - trigger installation state
- *   - required headers that are missing
- *   - current row data
- *   - every status that is close to qualifying
- *   - the exact fields preventing each status
- *   - the calculated automatic STATUS
- * ============================================================ */
-
-function diagnoseActiveRow() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) throw new Error('No active spreadsheet found.');
-
-  const sheet = ss.getActiveSheet();
-  if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) {
-    SpreadsheetApp.getUi().alert(
-      'Diagnostic Error',
-      'Select a row on the "Data List" sheet and run diagnoseActiveRow() again.',
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-    return;
-  }
-
-  const headers = getHeaders_(sheet);
-  const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-
-  if (statusColumn <= 0) {
-    SpreadsheetApp.getUi().alert(
-      'Diagnostic Error',
-      'The STATUS header was not found in row ' + CONFIG.HEADER_ROW + '.',
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-    return;
-  }
-
-  const row = sheet.getActiveRange().getRow();
-  if (row <= CONFIG.HEADER_ROW) {
-    SpreadsheetApp.getUi().alert(
-      'Diagnostic Error',
-      'Select a data row below the header row before running the diagnostic.',
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
-    return;
-  }
-
-  const lastColumn = sheet.getLastColumn();
-  const values = sheet.getRange(row, 1, 1, lastColumn).getValues()[0];
-  const displays = sheet.getRange(row, 1, 1, lastColumn).getDisplayValues()[0];
-
-  const data = {};
-  const displayData = {};
-
-  headers.forEach(function(header, index) {
-    if (!header) return;
-    data[header] = values[index];
-    displayData[header] = displays[index];
-  });
-
-  const calculatedStatus = determineAutomaticStatusFromData_(
-    data,
-    displayData
-  );
-
-  const currentStatus = normalizeText_(
-    sheet.getRange(row, statusColumn).getDisplayValue()
-  );
-
-  const missingHeaders = getMissingRequiredHeaders_(headers);
-  const diagnostics = [];
-
-  CONFIG.VALID_STATUSES.forEach(function(status) {
-    const blockers = getAutomaticStatusBlockers_(
-      status,
-      data,
-      displayData
-    );
-
-    diagnostics.push({
-      status: status,
-      blockers: blockers
-    });
-  });
-
-  const triggers = ScriptApp.getProjectTriggers()
-    .filter(function(trigger) {
-      const handler = trigger.getHandlerFunction();
-      return (
-        handler === 'validatorOnEdit' ||
-        handler === 'validatorOnOpen' ||
-        handler === 'validatorOnChange'
-      );
-    })
-    .map(function(trigger) {
-      return trigger.getHandlerFunction();
-    });
-
-  let html =
-    '<!doctype html><html><head><base target="_top">' +
-    '<style>' +
-    'body{font-family:Arial,sans-serif;padding:18px;color:#202124;background:#f8f9fa}' +
-    'h2{margin-top:0}' +
-    '.ok{color:#137333;font-weight:bold}' +
-    '.bad{color:#b3261e;font-weight:bold}' +
-    '.card{background:white;border:1px solid #dadce0;border-radius:8px;padding:12px;margin:10px 0}' +
-    '.status{font-weight:bold;font-size:15px}' +
-    'ul{margin:7px 0 0 20px;padding:0}' +
-    '.small{font-size:12px;color:#5f6368}' +
-    '</style></head><body>' +
-    '<h2>Procurement Validator Diagnostic</h2>' +
-    '<div class="card"><b>Sheet:</b> ' + escapeHtml_(sheet.getName()) +
-    ' &nbsp; <b>Row:</b> ' + escapeHtml_(row) + '</div>' +
-    '<div class="card"><b>Current STATUS:</b> ' +
-    escapeHtml_(currentStatus || '(blank)') +
-    '<br><b>Calculated STATUS:</b> ' +
-    escapeHtml_(calculatedStatus || '(none)') + '</div>' +
-    '<div class="card"><b>Validator triggers:</b> ' +
-    escapeHtml_(triggers.join(', ') || '(none)') + '</div>';
-
-  if (missingHeaders.length) {
-    html += '<div class="card"><div class="bad">Missing required headers</div><ul>';
-    missingHeaders.forEach(function(header) {
-      html += '<li>' + escapeHtml_(header) + '</li>';
-    });
-    html += '</ul></div>';
-  } else {
-    html += '<div class="card ok">All required procurement headers were found.</div>';
-  }
-
-  diagnostics.forEach(function(item) {
-    html += '<div class="card"><div class="status">' +
-      escapeHtml_(item.status) + '</div>';
-
-    if (item.blockers.length === 0) {
-      html += '<div class="ok">QUALIFIES</div>';
-    } else {
-      html += '<ul>';
-      item.blockers.forEach(function(blocker) {
-        html += '<li>' + escapeHtml_(blocker) + '</li>';
-      });
-      html += '</ul>';
-    }
-
-    html += '</div>';
-  });
-
-  html += '<div class="small">This diagnostic does not change STATUS or any other procurement field.</div>' +
-    '<p><button onclick="google.script.host.close()">Close</button></p>' +
-    '</body></html>';
-
-  SpreadsheetApp.getUi().showModalDialog(
-    HtmlService.createHtmlOutput(html)
-      .setWidth(700)
-      .setHeight(650),
-    'Validator Diagnostic'
-  );
-}
-
-/**
- * Return the exact reasons a status is not currently satisfied.
- */
-function getAutomaticStatusBlockers_(status, data, displayData) {
-  const rules = STATUS_RULES[status];
-  if (!rules) return ['Status rule definition not found.'];
-
-  const blockers = [];
-
-  Object.keys(rules).forEach(function(field) {
-    const rule = rules[field];
-    const value = data[field];
-    const displayValue = displayData[field];
-    const format = FIELD_FORMATS[field];
-
-    if (rule === 'required') {
-      if (isAcceptedValue_(field, value, displayValue)) return;
-
-      if (isBlankValue_(value, displayValue)) {
-        blockers.push(field + ': required value is blank.');
-        return;
-      }
-
-      if (!isAutomaticFormatValid_(field, value, displayValue, format)) {
-        blockers.push(field + ': invalid ' + format + ' format.');
-      }
-      return;
-    }
-
-    if (rule === 'blank') {
-      if (!isBlankValue_(value, displayValue)) {
-        blockers.push(field + ': must be blank.');
-      }
-      return;
-    }
-
-    if (rule === 'zero') {
-      if (!isZero_(value, displayValue)) {
-        blockers.push(field + ': must be 0 or 0.00.');
-      }
-      return;
-    }
-
-    if (rule === 'before' || rule === 'after') {
-      if (isAcceptedValue_(field, value, displayValue)) return;
-
-      if (isBlankValue_(value, displayValue)) {
-        blockers.push(field + ': date is required.');
-        return;
-      }
-
-      if (!isAutomaticFormatValid_(field, value, displayValue, 'date')) {
-        blockers.push(
-          field + ': invalid date format; expected ' + CONFIG.DATE_FORMAT + '.'
-        );
-        return;
-      }
-
-      const date = normalizeDate_(value);
-      const today = normalizeDate_(new Date());
-
-      if (!date) {
-        blockers.push(field + ': date could not be interpreted.');
-        return;
-      }
-
-      if (
-        rule === 'before' &&
-        date.getTime() >= today.getTime()
-      ) {
-        blockers.push(field + ': must be before today.');
-      }
-
-      if (
-        rule === 'after' &&
-        date.getTime() < today.getTime()
-      ) {
-        blockers.push(field + ': must be today or later.');
-      }
-
-      return;
-    }
-
-    if (rule.indexOf('exact:') === 0) {
-      const expected = rule.substring(6);
-      if (normalizeText_(displayValue) !== expected) {
-        blockers.push(field + ': must exactly equal "' + expected + '".');
-      }
-    }
-  });
-
-  // The date gates used by the automatic engine are additional to the
-  // per-field rules above. Report them explicitly so the diagnostic does
-  // not misleadingly say a status qualifies when its date gate fails.
-  const today = normalizeDate_(new Date());
-
-  const eligibility = isNAValue_('', displayData['ELIGIBILITY SCREENING'])
-    ? null
-    : normalizeDate_(data['ELIGIBILITY SCREENING']);
-
-  const submission = isNAValue_('', displayData['SUBMISSION OF BIDS'])
-    ? null
-    : normalizeDate_(data['SUBMISSION OF BIDS']);
-
-  const posting = isNAValue_('', displayData['POSTING DATE'])
-    ? null
-    : normalizeDate_(data['POSTING DATE']);
-
-  if (status === 'Active') {
-    if (!posting || posting.getTime() > today.getTime()) {
-      blockers.push('Date gate: POSTING DATE must be today or earlier.');
-    }
-
-    if (!(
-      (eligibility && eligibility.getTime() >= today.getTime()) ||
-      (submission && submission.getTime() >= today.getTime())
-    )) {
-      blockers.push(
-        'Date gate: ELIGIBILITY SCREENING or SUBMISSION OF BIDS must be today or later.'
-      );
-    }
-  }
-
-  if (status === 'Closed') {
-    if (!eligibility || eligibility.getTime() >= today.getTime()) {
-      blockers.push('Date gate: ELIGIBILITY SCREENING must be before today.');
-    }
-    if (!submission || submission.getTime() >= today.getTime()) {
-      blockers.push('Date gate: SUBMISSION OF BIDS must be before today.');
-    }
-  }
-
-  if (
-    status === 'Failed' ||
-    status === 'Awarded' ||
-    status === 'Purchase Order'
-  ) {
-    if (!eligibility || eligibility.getTime() <= today.getTime()) {
-      blockers.push('Date gate: ELIGIBILITY SCREENING must be after today.');
-    }
-    if (!submission || submission.getTime() <= today.getTime()) {
-      blockers.push('Date gate: SUBMISSION OF BIDS must be after today.');
-    }
-  }
-
-  return blockers;
-}
-
-/**
- * Verify the structural headers expected by the procurement rules.
- */
-function getMissingRequiredHeaders_(headers) {
-  const expected = new Set();
-
-  CONFIG.VALID_STATUSES.forEach(function(status) {
-    Object.keys(STATUS_RULES[status]).forEach(function(field) {
-      expected.add(field);
-    });
-  });
-
-  expected.add(CONFIG.STATUS_HEADER);
-
-  return Array.from(expected).filter(function(header) {
-    return headers.indexOf(header) === -1;
-  });
-}
-
-/**
- * Manual health check for the Apps Script project.
- *
- * This is intentionally not attached to onOpen/onEdit and creates no menu.
- */
-function validatorHealthCheck() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  if (!ss) throw new Error('No active spreadsheet found.');
-
-  const sheet = ss.getSheetByName(CONFIG.SHEET_NAME);
-  if (!sheet) {
-    throw new Error('Sheet "' + CONFIG.SHEET_NAME + '" was not found.');
-  }
-
-  const headers = getHeaders_(sheet);
-  const missingHeaders = getMissingRequiredHeaders_(headers);
-
-  const triggers = ScriptApp.getProjectTriggers().map(function(trigger) {
-    return trigger.getHandlerFunction();
-  });
-
-  const report = [
-    'Spreadsheet: ' + ss.getName(),
-    'Sheet: ' + sheet.getName(),
-    'Rows: ' + Math.max(0, sheet.getLastRow() - CONFIG.HEADER_ROW),
-    'Columns: ' + sheet.getLastColumn(),
-    'STATUS column: ' +
-      (headers.indexOf(CONFIG.STATUS_HEADER) + 1),
-    'Missing headers: ' +
-      (missingHeaders.length ? missingHeaders.join(', ') : 'NONE'),
-    'validatorOnEdit triggers: ' +
-      triggers.filter(function(name) {
-        return name === 'validatorOnEdit';
-      }).length,
-    'validatorOnOpen triggers: ' +
-      triggers.filter(function(name) {
-        return name === 'validatorOnOpen';
-      }).length,
-    'Total project triggers: ' + triggers.length
-  ].join('\n');
-
-  console.log(report);
-
-  ss.toast(
-    missingHeaders.length
-      ? 'Validator health check found missing headers. See execution log.'
-      : 'Validator health check passed. See execution log.',
-    'Validator',
-    6
-  );
-
-  return report;
-}
 
 /* ============================================================
  * HTML MODAL
