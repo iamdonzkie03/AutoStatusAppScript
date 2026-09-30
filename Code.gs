@@ -522,13 +522,17 @@ function validatorOnEdit(e) {
       if (oldStatus === automaticStatus) continue;
 
       statusCell.setValue(automaticStatus);
-      SpreadsheetApp.flush();
 
       const rowErrors = validateRow_(sheet, row, headers, automaticStatus);
       rowErrors.forEach(error => allErrors.push(error));
     }
 
-    if (allErrors.length > 0) showValidationModal_(allErrors);
+    if (allErrors.length > 0) {
+      // Flush only when a validation dialog is actually needed so the
+      // newly assigned status is visible before the modal opens.
+      SpreadsheetApp.flush();
+      showValidationModal_(allErrors);
+    }
   } catch (error) {
     console.error('validatorOnEdit error:', error);
   }
@@ -544,23 +548,26 @@ function determineAutomaticStatus_(
   headers
 ) {
 
+  // Read the entire edited row in ONE spreadsheet call for values and
+  // ONE call for display values. The previous implementation called
+  // getRange().getValue() separately for every column, which made each
+  // edit unnecessarily slow.
+  const lastColumn = sheet.getLastColumn();
+  const rowValues = sheet
+    .getRange(row, 1, 1, lastColumn)
+    .getValues()[0];
+  const rowDisplayValues = sheet
+    .getRange(row, 1, 1, lastColumn)
+    .getDisplayValues()[0];
+
   const data = {};
+  const displayData = {};
 
-  headers.forEach(
-    (header, index) => {
-
-      if (!header) return;
-
-      data[header] =
-        sheet
-          .getRange(
-            row,
-            index + 1
-          )
-          .getValue();
-
-    }
-  );
+  headers.forEach((header, index) => {
+    if (!header) return;
+    data[header] = rowValues[index];
+    displayData[header] = rowDisplayValues[index];
+  });
 
 
   // Keep STATUS blank when the entire procurement row has no data.
