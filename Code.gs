@@ -411,8 +411,55 @@ function setupValidator() {
  * ============================================================ */
 
 function onEdit(e) {
-  // Intentionally empty. All edit processing is handled by the
-  // installable validatorOnEdit trigger created by setupValidator().
+  /*
+   * Built-in simple trigger for automatic STATUS calculation.
+   *
+   * This deliberately does NOT depend on an installable trigger.
+   * Therefore STATUS calculation works whenever an editor changes
+   * data on the "Data List" sheet.
+   *
+   * Validation/modal processing remains separate in validatorOnEdit().
+   */
+  try {
+    if (!e || !e.range) return;
+
+    const range = e.range;
+    const sheet = range.getSheet();
+
+    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+    if (range.getRow() <= CONFIG.HEADER_ROW) return;
+
+    const headers = getHeaders_(sheet);
+    const statusColumn =
+      headers.indexOf(CONFIG.STATUS_HEADER) + 1;
+
+    if (statusColumn <= 0) return;
+
+    const firstRow = range.getRow();
+    const lastRow =
+      firstRow + range.getNumRows() - 1;
+
+    for (
+      let row = firstRow;
+      row <= lastRow;
+      row++
+    ) {
+      updateRowStatus_(
+        sheet,
+        row,
+        headers,
+        statusColumn
+      );
+    }
+
+    SpreadsheetApp.flush();
+
+  } catch (error) {
+    console.error(
+      'Automatic STATUS onEdit error:',
+      error
+    );
+  }
 }
 
 
