@@ -14,7 +14,7 @@
  * - PURCHASE ORDER: all PO fields complete and PO TOTAL COST > 0.
  * - CANCELLED PO: all PO fields complete and PO TOTAL COST = 0/0.00.
  * - CANCELLED PR: PR TOTAL ABC = 0 and Remarks = Cancelled PR.
- * - REALIGNED ITEM: TOTAL ABC = 0 or Remarks indicates realignment.
+ * - REALIGNED ITEM: TOTAL ABC = 0/0.00 AND Remarks contains a word beginning with "realign".
  *
  * Blank fields are not errors unless the selected status requires them.
  * No custom spreadsheet menu is created.
@@ -270,11 +270,19 @@ function determineStatus_(sheet, row, headers) {
   // No automatic status is assigned until it is present and numeric.
   if (!requiredPhilGEPSValid_(data)) return '';
 
-  // Realigned item.
-  if (
-    isZero_(data['TOTAL ABC'], display_(sheet, row, headers, 'TOTAL ABC')) ||
-    /realign/i.test(normalize_(data['REMARKS']))
-  ) {
+  // Realigned Item: BOTH conditions are mandatory.
+  // 1) TOTAL ABC must be exactly 0 / 0.00.
+  // 2) REMARKS must contain a word beginning with "realign"
+  //    (e.g. Realign, Realigned, Realigned Item, Realignment).
+  const totalAbcIsZero = isZero_(
+    data['TOTAL ABC'],
+    display_(sheet, row, headers, 'TOTAL ABC')
+  );
+  const remarksIndicateRealignment = /\\brealign\\w*\\b/i.test(
+    normalize_(data['REMARKS'])
+  );
+
+  if (totalAbcIsZero && remarksIndicateRealignment) {
     return 'Realigned Item';
   }
 
