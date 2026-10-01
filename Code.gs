@@ -28,6 +28,8 @@ const CONFIG = {
   MAX_ERRORS_DISPLAYED: 100
 };
 
+const PHILGEPS_REQUIRED_FIELD = 'PHILGEPS REFERENCE NO.';
+
 const CORE_FIELDS = [
   'PRE-PROCUREMENT CONFERENCE',
   'POSTING DATE',
@@ -36,7 +38,8 @@ const CORE_FIELDS = [
   'ELIGIBILITY SCREENING',
   'SUBMISSION OF BIDS',
   'PROCUREMENT METHOD',
-  'PROJECT TITLE'
+  'PROJECT TITLE',
+  PHILGEPS_REQUIRED_FIELD
 ];
 
 const AWARDED_FIELDS = CORE_FIELDS.concat([
@@ -48,6 +51,7 @@ const AWARDED_FIELDS = CORE_FIELDS.concat([
 ]);
 
 const FAILED_FIELDS = [
+  PHILGEPS_REQUIRED_FIELD,
   'PRE-PROCUREMENT CONFERENCE',
   'POSTING DATE',
   'PRE-BID CONFERENCE',
@@ -415,10 +419,10 @@ function getRequiredFields_(status) {
       return PO_FIELDS;
 
     case 'Cancelled PR':
-      return ['PR NO.', 'PR TOTAL ABC', 'REMARKS'];
+      return [PHILGEPS_REQUIRED_FIELD, 'PR NO.', 'PR TOTAL ABC', 'REMARKS'];
 
     case 'Realigned Item':
-      return ['TOTAL ABC', 'PR NO.', 'PR TOTAL ABC'];
+      return [PHILGEPS_REQUIRED_FIELD, 'TOTAL ABC', 'PR NO.', 'PR TOTAL ABC'];
 
     default:
       return [];
