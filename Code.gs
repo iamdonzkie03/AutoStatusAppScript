@@ -278,7 +278,7 @@ function determineStatus_(sheet, row, headers) {
     data['TOTAL ABC'],
     display_(sheet, row, headers, 'TOTAL ABC')
   );
-  const remarksIndicateRealignment = /\\brealign\\w*\\b/i.test(
+  const remarksIndicateRealignment = /\brealign\w*\b/i.test(
     normalize_(data['REMARKS'])
   );
 
