@@ -266,6 +266,10 @@ function determineStatus_(sheet, row, headers) {
 
   if (isCompletelyBlank_(data)) return '';
 
+  // PhilGEPS Reference No. is mandatory and numeric for every status.
+  // No automatic status is assigned until it is present and numeric.
+  if (!requiredPhilGEPSValid_(data)) return '';
+
   // Realigned item.
   if (
     isZero_(data['TOTAL ABC'], display_(sheet, row, headers, 'TOTAL ABC')) ||
@@ -325,6 +329,11 @@ function determineStatus_(sheet, row, headers) {
   }
 
   return '';
+}
+
+function requiredPhilGEPSValid_(data) {
+  return hasValue_(data[PHILGEPS_REQUIRED_FIELD]) &&
+    isNumeric_(data[PHILGEPS_REQUIRED_FIELD], normalize_(data[PHILGEPS_REQUIRED_FIELD]));
 }
 
 function downstreamDatesBeforeToday_(data) {
