@@ -266,25 +266,18 @@ function determineStatus_(sheet, row, headers) {
 
   if (isCompletelyBlank_(data)) return '';
 
-  // PhilGEPS Reference No. is mandatory and numeric for every status.
-  // No automatic status is assigned until it is present and numeric.
-  if (!requiredPhilGEPSValid_(data)) return '';
-
-  // Realigned Item: BOTH conditions are mandatory.
-  // 1) TOTAL ABC must be exactly 0 / 0.00.
-  // 2) REMARKS must contain a word beginning with "realign"
-  //    (e.g. Realign, Realigned, Realigned Item, Realignment).
-  const totalAbcIsZero = isZero_(
-    data['TOTAL ABC'],
-    display_(sheet, row, headers, 'TOTAL ABC')
-  );
-  const remarksIndicateRealignment = /\brealign\w*\b/i.test(
-    normalize_(data['REMARKS'])
-  );
-
-  if (totalAbcIsZero && remarksIndicateRealignment) {
+  // REALIGNED ITEM is determined first from its own explicit conditions.
+  // It must not be blocked by the general PhilGEPS gate.
+  // Conditions:
+  //   1) TOTAL ABC = 0 or 0.00
+  //   2) REMARKS contains Realign / Realigned / Realignment, etc.
+  if (isRealignedItem_(data, sheet, row, headers)) {
     return 'Realigned Item';
   }
+
+  // PhilGEPS Reference No. is mandatory and numeric for all other statuses.
+  // No other automatic status is assigned until it is present and numeric.
+  if (!requiredPhilGEPSValid_(data)) return '';
 
   // Cancelled PR.
   if (
@@ -337,6 +330,25 @@ function determineStatus_(sheet, row, headers) {
   }
 
   return '';
+}
+
+function isRealignedItem_(data, sheet, row, headers) {
+  const totalAbcDisplay = display_(sheet, row, headers, 'TOTAL ABC');
+  const remarksDisplay = display_(sheet, row, headers, 'REMARKS');
+
+  const totalAbc = getNumber_(data['TOTAL ABC']);
+  const totalAbcFromDisplay = getNumber_(totalAbcDisplay);
+  const zeroTotalAbc =
+    (totalAbc !== null && totalAbc === 0) ||
+    (totalAbcFromDisplay !== null && totalAbcFromDisplay === 0);
+
+  const remarks = normalize_(data['REMARKS'] || remarksDisplay);
+
+  // Match a standalone word beginning with "realign":
+  // Realign, Realigned, Realignment, Realignments, etc.
+  const hasRealignmentRemark = /\\brealign\\w*\\b/i.test(remarks);
+
+  return zeroTotalAbc && hasRealignmentRemark;
 }
 
 function requiredPhilGEPSValid_(data) {
