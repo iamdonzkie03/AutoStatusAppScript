@@ -497,7 +497,15 @@ function getHeaders_(sheet) {
 
   return sheet.getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
     .getDisplayValues()[0]
-    .map(normalize_);
+    .map(normalizeHeader_);
+}
+
+function normalizeHeader_(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/\\s+/g, ' ')
+    .trim()
+    .toUpperCase();
 }
 
 function getRowData_(sheet, row, headers) {
