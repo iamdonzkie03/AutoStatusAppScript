@@ -14,7 +14,7 @@
  * - PURCHASE ORDER: all PO fields complete and PO TOTAL COST > 0.
  * - CANCELLED PO: all PO fields complete and PO TOTAL COST = 0/0.00.
  * - CANCELLED PR: PR TOTAL ABC = 0 and Remarks = Cancelled PR.
- * - REALIGNED ITEM: TOTAL ABC = 0/0.00 AND Remarks contains a word beginning with "realign".
+ * - REALIGNED ITEM: ONLY TOTAL ABC = 0/0.00 AND Remarks contains the word "realign".
  *
  * Blank fields are not errors unless the selected status requires them.
  * No custom spreadsheet menu is created.
@@ -333,22 +333,29 @@ function determineStatus_(sheet, row, headers) {
 }
 
 function isRealignedItem_(data, sheet, row, headers) {
+  // REALIGNED ITEM has ONLY two requirements:
+  // 1) TOTAL ABC must be exactly 0 or 0.00
+  // 2) REMARKS must contain the word "realign" (case-insensitive)
+  //
+  // This check intentionally does NOT require PhilGEPS, PR No.,
+  // PR Total ABC, or any other procurement field.
+
   const totalAbcDisplay = display_(sheet, row, headers, 'TOTAL ABC');
   const remarksDisplay = display_(sheet, row, headers, 'REMARKS');
 
   const totalAbc = getNumber_(data['TOTAL ABC']);
-  const totalAbcFromDisplay = getNumber_(totalAbcDisplay);
-  const zeroTotalAbc =
+  const totalAbcShown = getNumber_(totalAbcDisplay);
+
+  const totalAbcIsZero =
     (totalAbc !== null && totalAbc === 0) ||
-    (totalAbcFromDisplay !== null && totalAbcFromDisplay === 0);
+    (totalAbcShown !== null && totalAbcShown === 0);
 
   const remarks = normalize_(data['REMARKS'] || remarksDisplay);
 
-  // Match a standalone word beginning with "realign":
-  // Realign, Realigned, Realignment, Realignments, etc.
-  const hasRealignmentRemark = /\\brealign\\w*\\b/i.test(remarks);
+  // Matches: realign, realigned, realignment, realignments, etc.
+  const remarksHasRealign = /\brealign\w*\b/i.test(remarks);
 
-  return zeroTotalAbc && hasRealignmentRemark;
+  return totalAbcIsZero && remarksHasRealign;
 }
 
 function requiredPhilGEPSValid_(data) {
@@ -451,7 +458,7 @@ function getRequiredFields_(status) {
       return [PHILGEPS_REQUIRED_FIELD, 'PR NO.', 'PR TOTAL ABC', 'REMARKS'];
 
     case 'Realigned Item':
-      return [PHILGEPS_REQUIRED_FIELD, 'TOTAL ABC', 'PR NO.', 'PR TOTAL ABC'];
+      return ['TOTAL ABC', 'REMARKS'];
 
     default:
       return [];
@@ -503,7 +510,7 @@ function getHeaders_(sheet) {
 function normalizeHeader_(value) {
   if (value === null || value === undefined) return '';
   return String(value)
-    .replace(/\\s+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
 }
