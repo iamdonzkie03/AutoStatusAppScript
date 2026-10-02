@@ -7,7 +7,7 @@
  * Run setupValidator() ONCE after installing/updating this code.
  *
  * Main improvements:
- * - Simple onEdit is the single automatic status-processing path.
+ * - One installable onEdit is the single automatic status-processing path.
  * - No full-sheet status refresh on every open.
  * - Batched row reads and status writes.
  * - No per-cell getDisplayValue() calls during status calculation/validation.
@@ -127,8 +127,13 @@ function setupValidator() {
     }
   });
 
-  // Automatic status updates are handled by the simple onEdit trigger.
-  // This avoids duplicate processing of every edit.
+  // Use ONE installable edit trigger. This works reliably for all spreadsheet
+  // editors and avoids relying on a simple-trigger execution context.
+  ScriptApp.newTrigger('validatorOnEdit')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
@@ -149,38 +154,12 @@ function setupValidator() {
 /**
  * Deliberately empty simple trigger.
  *
- * This is a status-only fallback. It does not show the validation modal.
- * Validation remains available through the manual validator and existing
- * validation functions. Automatic status calculation is intentionally kept
- * in this lightweight trigger for speed.
+ * Automatic status processing is handled by the installable validatorOnEdit
+ * trigger so it works reliably for spreadsheet editors.
  */
 function onEdit(e) {
-  if (!e || !e.range) return;
-
-  const range = e.range;
-  const sheet = range.getSheet();
-
-  if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-
-  // Ignore header-only edits.
-  if (range.getLastRow() <= CONFIG.HEADER_ROW) return;
-
-  try {
-    const headers = getHeadersCached_(sheet);
-    const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
-
-    if (statusIndex < 0) return;
-
-    // Process only the rows actually touched by the edit.
-    const firstRow = Math.max(range.getRow(), CONFIG.HEADER_ROW + 1);
-    const lastRow = range.getLastRow();
-
-    for (let row = firstRow; row <= lastRow; row++) {
-      processSingleRowFast_(sheet, row, headers, statusIndex);
-    }
-  } catch (err) {
-    console.error('onEdit status error: ' + err);
-  }
+  // Intentionally empty. Automatic status processing is handled by the
+  // single installable validatorOnEdit trigger created by setupValidator().
 }
 
 /**
@@ -236,28 +215,36 @@ function validatorOnEdit(e) {
   const sheet = range.getSheet();
 
   if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-  if (range.getRow() <= CONFIG.HEADER_ROW && range.getLastRow() <= CONFIG.HEADER_ROW) {
-    return;
-  }
+  if (range.getLastRow() <= CONFIG.HEADER_ROW) return;
 
   const lock = LockService.getDocumentLock();
 
   try {
-    if (!lock.tryLock(CONFIG.LOCK_TIMEOUT_MS)) {
-      console.warn('Validator skipped because another edit is being processed.');
-      return;
+    if (!lock.tryLock(CONFIG.LOCK_TIMEOUT_MS)) return;
+
+    const headers = getHeadersCached_(sheet);
+    const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
+    if (statusIndex < 0) return;
+
+    const firstRow = Math.max(range.getRow(), CONFIG.HEADER_ROW + 1);
+    const lastRow = range.getLastRow();
+
+    const allErrors = [];
+    let anyStatusChanged = false;
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      const result = processSingleRowFast_(sheet, row, headers, statusIndex, true);
+      if (result.statusChanged) anyStatusChanged = true;
+      if (result.errors.length) {
+        Array.prototype.push.apply(allErrors, result.errors);
+      }
     }
 
-    const result = processEditedRows_(sheet, range, true);
-
-    // UI is attempted only from the installable edit context.
-    // If the execution context does not permit UI, the error is logged and
-    // status processing is still considered successful.
-    if (result.errors.length && result.statusChanged) {
+    if (allErrors.length && anyStatusChanged) {
       try {
-        showValidationModal_(result.errors);
+        showValidationModal_(allErrors);
       } catch (uiErr) {
-        console.warn('Validation modal unavailable in this trigger context: ' + uiErr);
+        console.warn('Validation modal unavailable: ' + uiErr);
       }
     }
   } catch (err) {
@@ -300,7 +287,8 @@ function getHeadersCached_(sheet) {
  *
  * It never reads rows 1..N just because the edited row is large.
  */
-function processSingleRowFast_(sheet, row, headers, statusIndex) {
+function processSingleRowFast_(sheet, row, headers, statusIndex, collectErrors) {
+  // Exactly one row read, regardless of whether this is Row 2 or Row 50,000.
   const rowRange = sheet.getRange(row, 1, 1, headers.length);
   const values = rowRange.getValues()[0];
   const displayValues = rowRange.getDisplayValues()[0];
@@ -317,10 +305,28 @@ function processSingleRowFast_(sheet, row, headers, statusIndex) {
 
   const status = determineStatus_(data, displayData);
   const currentStatus = normalize_(displayData[CONFIG.STATUS_HEADER]);
+  const statusChanged = currentStatus !== status;
 
-  if (currentStatus !== status) {
+  if (statusChanged) {
     sheet.getRange(row, statusIndex + 1).setValue(status);
   }
+
+  let errors = [];
+
+  if (collectErrors && status) {
+    errors = validateRowFromData_(
+      row,
+      headers,
+      data,
+      displayData,
+      status
+    );
+  }
+
+  return {
+    statusChanged: statusChanged,
+    errors: errors
+  };
 }
 
 /**
