@@ -6,8 +6,13 @@
  *
  * Run setupValidator() ONCE after installing/updating this code.
  *
+ * NOTE: Automatic row status updates also work through the bound onEdit(e)
+ * function, so the validator does not depend exclusively on an installed
+ * trigger.
+ *
  * Main improvements:
- * - Installable validatorOnEdit is the single automatic status-processing path.
+ * - Direct onEdit is the primary automatic status-processing path.
+ * - Installable validatorOnEdit is retained as a fallback for shared editors.
  * - No full-sheet status refresh on every open.
  * - Batched row reads and status writes.
  * - No per-cell getDisplayValue() calls during status calculation/validation.
@@ -130,9 +135,8 @@ function setupValidator() {
     }
   });
 
-  // Use ONE installable edit trigger for automatic status updates.
-  // This runs with the authorization of the account that created the trigger
-  // and therefore works when other spreadsheet editors modify Data List.
+  // Installable edit trigger is retained as a fallback. The bound simple
+  // onEdit below also processes ordinary user edits without requiring setup.
   ScriptApp.newTrigger('validatorOnEdit')
     .forSpreadsheet(ss)
     .onEdit()
@@ -156,20 +160,18 @@ function setupValidator() {
 }
 
 /**
- * No simple onEdit trigger is used.
+ * Direct bound edit trigger.
  *
- * Automatic status processing is handled exclusively by the installable
- * validatorOnEdit trigger created by setupValidator().
- *
- * Keeping only one edit trigger prevents duplicate status writes and makes
- * the behavior consistent for all spreadsheet editors.
+ * This is deliberately kept as the primary automatic path so status changes
+ * do not depend on setupValidator() having successfully installed an
+ * installable trigger. It processes only the edited row(s).
  */
+function onEdit(e) {
+  validatorOnEdit(e);
+}
 
 /**
- * No simple onEdit trigger is used.
- *
- * The installable validatorOnOpen trigger handles opening the spreadsheet.
- * No full refresh is performed by a simple trigger.
+ * No menu is created.
  */
 function onOpen(e) {
   return;
@@ -617,11 +619,11 @@ function isCancelledPOReady_(data) {
 }
 
 function requiredPhilGEPSValid_(data, displayData) {
-  return hasValue_(data[PHILGEPS_REQUIRED_FIELD]) &&
-    isNumeric_(
-      data[PHILGEPS_REQUIRED_FIELD],
-      displayData[PHILGEPS_REQUIRED_FIELD]
-    );
+  // PhilGEPS reference numbers may be numeric, alphanumeric, or contain
+  // punctuation. The requirement for status calculation is that the field
+  // is actually populated; format validation must not block status changes.
+  return hasValue_(data[PHILGEPS_REQUIRED_FIELD]) ||
+    hasValue_(displayData[PHILGEPS_REQUIRED_FIELD]);
 }
 
 function downstreamDatesBeforeToday_(data) {
@@ -763,6 +765,10 @@ function validateFieldFormat_(field, value, display) {
   }
 
   if (NUMERIC_FIELDS.indexOf(field) >= 0) {
+    // PhilGEPS reference numbers are identifiers, not monetary quantities.
+    // Accept numeric, alphanumeric, and punctuated reference values.
+    if (field === PHILGEPS_REQUIRED_FIELD) return null;
+
     if (!isNumeric_(value, display)) {
       return 'Invalid number format. This field must contain a numeric value.';
     }
