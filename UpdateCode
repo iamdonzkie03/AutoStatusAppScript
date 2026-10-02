@@ -179,18 +179,11 @@ function onOpen(e) {
  * actual edits are handled by validatorOnEdit.
  */
 function validatorOnOpen(e) {
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sheet = ss && ss.getSheetByName(CONFIG.SHEET_NAME);
-    if (!sheet) return;
-
-    // Refresh only rows whose status may have become date-dependent.
-    // This is intentionally lightweight and does not force a complete
-    // cell-by-cell recalculation.
-    refreshStatusesBatch_(sheet);
-  } catch (err) {
-    console.error('validatorOnOpen error: ' + err);
-  }
+  // Intentionally do nothing.
+  //
+  // Recalculating every row during spreadsheet open was one of the main
+  // causes of slow loading. Edits are handled by validatorOnEdit and
+  // date-only status changes are handled by validatorDailyRefresh.
 }
 
 /**
@@ -279,7 +272,7 @@ function processEditedRows_(sheet, range, collectErrors) {
   }
 
   const rowCount = lastRow - firstRow + 1;
-  const rows = readRows_(sheet, firstRow, rowCount, headers.length);
+  const rows = readRows_(sheet, firstRow, rowCount, headers.length, headers);
 
   const statusValues = [];
   const errors = [];
@@ -348,7 +341,8 @@ function refreshStatusesBatch_(sheet) {
     sheet,
     CONFIG.HEADER_ROW + 1,
     rowCount,
-    headers.length
+    headers.length,
+    headers
   );
 
   const statusValues = [];
@@ -377,13 +371,13 @@ function refreshAllStatuses_(sheet) {
  * Both raw values and displayed values are captured in two batch reads.
  * No individual cell reads are performed during status calculation.
  */
-function readRows_(sheet, startRow, rowCount, columnCount) {
+function readRows_(sheet, startRow, rowCount, columnCount, headers) {
   const range = sheet.getRange(startRow, 1, rowCount, columnCount);
 
   const values = range.getValues();
   const displayValues = range.getDisplayValues();
 
-  const headers = getHeaders_(sheet);
+  headers = headers || getHeaders_(sheet);
   const rows = [];
 
   for (let r = 0; r < rowCount; r++) {
@@ -628,7 +622,7 @@ function validateRowFromData_(row, headers, data, displayData, status) {
  * Backward-compatible manual validation helper.
  */
 function validateRow_(sheet, row, headers, status) {
-  const rowInfo = readRows_(sheet, row, 1, headers.length)[0];
+  const rowInfo = readRows_(sheet, row, 1, headers.length, headers)[0];
 
   return validateRowFromData_(
     row,
