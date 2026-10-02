@@ -587,6 +587,20 @@ function isRealignedItem_(data, displayData) {
 function isPurchaseOrderReady_(data) {
   if (!fieldsComplete_(data, PO_FIELDS)) return false;
 
+  // Purchase Order status requires both Eligibility Screening and
+  // Submission of Bids to be strictly before today.
+  const eligibility = getDate_(data['ELIGIBILITY SCREENING']);
+  const submission = getDate_(data['SUBMISSION OF BIDS']);
+
+  if (
+    !eligibility ||
+    !submission ||
+    !isBeforeToday_(eligibility) ||
+    !isBeforeToday_(submission)
+  ) {
+    return false;
+  }
+
   const totalAbc = getNumber_(data['TOTAL ABC']);
   const prTotalAbc = getNumber_(data['PR TOTAL ABC']);
   const poTotalCost = getNumber_(data['PO TOTAL COST']);
