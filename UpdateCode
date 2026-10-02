@@ -7,7 +7,7 @@
  * Run setupValidator() ONCE after installing/updating this code.
  *
  * Main improvements:
- * - Bound onEdit is the single automatic status-processing path.
+ * - Installable validatorOnEdit is the single automatic status-processing path.
  * - No full-sheet status refresh on every open.
  * - Batched row reads and status writes.
  * - No per-cell getDisplayValue() calls during status calculation/validation.
@@ -102,8 +102,9 @@ const NUMERIC_FIELDS = [
 /**
  * Run once after installing/updating the code.
  * Removes old validator triggers and creates exactly:
- *   1. installable onOpen
- *   2. daily time-driven refresh
+ *   1. installable onEdit
+ *   2. installable onOpen
+ *   3. daily time-driven refresh
  */
 function setupValidator() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -116,6 +117,8 @@ function setupValidator() {
 
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
     const fn = trigger.getHandlerFunction();
+
+    // Remove every trigger created by older versions of this validator.
     if (
       fn === 'validatorOnEdit' ||
       fn === 'validatorOnOpen' ||
@@ -127,8 +130,14 @@ function setupValidator() {
     }
   });
 
-  // Automatic status changes use the bound simple onEdit(e) below.
-  // No installable edit trigger is created, preventing duplicate processing.
+  // Use ONE installable edit trigger for automatic status updates.
+  // This runs with the authorization of the account that created the trigger
+  // and therefore works when other spreadsheet editors modify Data List.
+  ScriptApp.newTrigger('validatorOnEdit')
+    .forSpreadsheet(ss)
+    .onEdit()
+    .create();
+
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
@@ -147,74 +156,17 @@ function setupValidator() {
 }
 
 /**
- * Deliberately empty simple trigger.
+ * No simple onEdit trigger is used.
  *
- * Automatic status processing is handled by the installable validatorOnEdit
- * trigger so it works reliably for spreadsheet editors.
+ * Automatic status processing is handled exclusively by the installable
+ * validatorOnEdit trigger created by setupValidator().
+ *
+ * Keeping only one edit trigger prevents duplicate status writes and makes
+ * the behavior consistent for all spreadsheet editors.
  */
-function onEdit(e) {
-  if (!e || !e.range) return;
-
-  const range = e.range;
-  const sheet = range.getSheet();
-
-  if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-  if (range.getLastRow() <= CONFIG.HEADER_ROW) return;
-
-  try {
-    const lastColumn = sheet.getLastColumn();
-    if (lastColumn < 1) return;
-
-    // Read only the edited row(s). No scanning from Row 2 to the edited row.
-    const firstRow = Math.max(range.getRow(), CONFIG.HEADER_ROW + 1);
-    const rowCount = range.getLastRow() - firstRow + 1;
-
-    const headers = sheet
-      .getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
-      .getDisplayValues()[0]
-      .map(normalizeHeader_);
-
-    const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
-    if (statusIndex < 0) return;
-
-    const values = sheet
-      .getRange(firstRow, 1, rowCount, lastColumn)
-      .getValues();
-
-    const displayValues = sheet
-      .getRange(firstRow, 1, rowCount, lastColumn)
-      .getDisplayValues();
-
-    const statusValues = [];
-
-    for (let r = 0; r < rowCount; r++) {
-      const data = {};
-      const displayData = {};
-
-      for (let col = 0; col < headers.length; col++) {
-        const field = headers[col];
-        if (!field) continue;
-        data[field] = values[r][col];
-        displayData[field] = displayValues[r][col];
-      }
-
-      statusValues.push([
-        determineStatus_(data, displayData)
-      ]);
-    }
-
-    // One status-column write for the edited rows.
-    sheet
-      .getRange(firstRow, statusIndex + 1, rowCount, 1)
-      .setValues(statusValues);
-
-  } catch (err) {
-    console.error('Automatic status error: ' + err);
-  }
-}
 
 /**
- * Deliberately empty simple trigger.
+ * No simple onEdit trigger is used.
  *
  * The installable validatorOnOpen trigger handles opening the spreadsheet.
  * No full refresh is performed by a simple trigger.
