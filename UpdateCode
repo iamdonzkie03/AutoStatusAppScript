@@ -7,7 +7,7 @@
  * Run setupValidator() ONCE after installing/updating this code.
  *
  * Main improvements:
- * - One installable onEdit is the single automatic status-processing path.
+ * - Bound onEdit is the single automatic status-processing path.
  * - No full-sheet status refresh on every open.
  * - Batched row reads and status writes.
  * - No per-cell getDisplayValue() calls during status calculation/validation.
@@ -127,13 +127,8 @@ function setupValidator() {
     }
   });
 
-  // Use ONE installable edit trigger. This works reliably for all spreadsheet
-  // editors and avoids relying on a simple-trigger execution context.
-  ScriptApp.newTrigger('validatorOnEdit')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
+  // Automatic status changes use the bound simple onEdit(e) below.
+  // No installable edit trigger is created, preventing duplicate processing.
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
@@ -158,8 +153,64 @@ function setupValidator() {
  * trigger so it works reliably for spreadsheet editors.
  */
 function onEdit(e) {
-  // Intentionally empty. Automatic status processing is handled by the
-  // single installable validatorOnEdit trigger created by setupValidator().
+  if (!e || !e.range) return;
+
+  const range = e.range;
+  const sheet = range.getSheet();
+
+  if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+  if (range.getLastRow() <= CONFIG.HEADER_ROW) return;
+
+  try {
+    const lastColumn = sheet.getLastColumn();
+    if (lastColumn < 1) return;
+
+    // Read only the edited row(s). No scanning from Row 2 to the edited row.
+    const firstRow = Math.max(range.getRow(), CONFIG.HEADER_ROW + 1);
+    const rowCount = range.getLastRow() - firstRow + 1;
+
+    const headers = sheet
+      .getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
+      .getDisplayValues()[0]
+      .map(normalizeHeader_);
+
+    const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
+    if (statusIndex < 0) return;
+
+    const values = sheet
+      .getRange(firstRow, 1, rowCount, lastColumn)
+      .getValues();
+
+    const displayValues = sheet
+      .getRange(firstRow, 1, rowCount, lastColumn)
+      .getDisplayValues();
+
+    const statusValues = [];
+
+    for (let r = 0; r < rowCount; r++) {
+      const data = {};
+      const displayData = {};
+
+      for (let col = 0; col < headers.length; col++) {
+        const field = headers[col];
+        if (!field) continue;
+        data[field] = values[r][col];
+        displayData[field] = displayValues[r][col];
+      }
+
+      statusValues.push([
+        determineStatus_(data, displayData)
+      ]);
+    }
+
+    // One status-column write for the edited rows.
+    sheet
+      .getRange(firstRow, statusIndex + 1, rowCount, 1)
+      .setValues(statusValues);
+
+  } catch (err) {
+    console.error('Automatic status error: ' + err);
+  }
 }
 
 /**
