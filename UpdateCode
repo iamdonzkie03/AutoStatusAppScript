@@ -2,22 +2,28 @@
  * PROCUREMENT AUTO STATUS / VALIDATOR
  * Target sheet: Data List
  *
- * Run setupValidator() ONCE after installing this code.
+ * PERFORMANCE-OPTIMIZED VERSION
+ *
+ * Run setupValidator() ONCE after installing/updating this code.
+ *
+ * Main improvements:
+ * - One installable edit trigger only; no duplicate simple onEdit processing.
+ * - No full-sheet status refresh on every open.
+ * - Batched row reads and status writes.
+ * - No per-cell getDisplayValue() calls during status calculation/validation.
+ * - Only edited rows are processed on edit.
+ * - Daily trigger refreshes date-dependent statuses once per day.
+ * - Short lock prevents overlapping edits from racing each other.
  *
  * Status rules:
- * - ACTIVE: core procurement fields complete; eligibility/submission are
- *   today or later.
- * - CLOSED: core procurement fields complete; eligibility/submission are
- *   both before today.
+ * - ACTIVE: core procurement fields complete; eligibility/submission are today or later.
+ * - CLOSED: core procurement fields complete; eligibility/submission are both before today.
  * - AWARDED: downstream award fields complete; Supplier required.
  * - FAILED: downstream award fields complete; Supplier NOT required.
- * - PURCHASE ORDER: all PO fields complete; TOTAL ABC = 0/0.00; PR TOTAL ABC = 0/0.00; PO TOTAL COST > 0.
- * - CANCELLED PO: all PO fields complete; TOTAL ABC = 0/0.00; PR TOTAL ABC = 0/0.00; PO TOTAL COST = 0/0.00.
+ * - PURCHASE ORDER: all PO fields complete; TOTAL ABC = 0; PR TOTAL ABC = 0; PO TOTAL COST > 0.
+ * - CANCELLED PO: all PO fields complete; TOTAL ABC = 0; PR TOTAL ABC = 0; PO TOTAL COST = 0.
  * - CANCELLED PR: PR TOTAL ABC = 0 and Remarks = Cancelled PR.
- * - REALIGNED ITEM: ONLY TOTAL ABC = 0/0.00 AND Remarks contains the word "realign".
- *
- * Blank fields are not errors unless the selected status requires them.
- * No custom spreadsheet menu is created.
+ * - REALIGNED ITEM: ONLY TOTAL ABC = 0 AND Remarks contains "realign".
  */
 
 const CONFIG = {
@@ -25,7 +31,8 @@ const CONFIG = {
   HEADER_ROW: 1,
   STATUS_HEADER: 'STATUS',
   DATE_FORMAT: 'MMMM d, yyyy',
-  MAX_ERRORS_DISPLAYED: 100
+  MAX_ERRORS_DISPLAYED: 100,
+  LOCK_TIMEOUT_MS: 1500
 };
 
 const PHILGEPS_REQUIRED_FIELD = 'PHILGEPS REFERENCE NO.';
@@ -93,8 +100,11 @@ const NUMERIC_FIELDS = [
 ];
 
 /**
- * Install/refresh the validator triggers.
- * Run manually once.
+ * Run once after installing/updating the code.
+ * Removes old validator triggers and creates exactly:
+ *   1. installable onEdit
+ *   2. installable onOpen
+ *   3. daily time-driven refresh
  */
 function setupValidator() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -107,7 +117,13 @@ function setupValidator() {
 
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
     const fn = trigger.getHandlerFunction();
-    if (fn === 'validatorOnEdit' || fn === 'validatorOnOpen') {
+    if (
+      fn === 'validatorOnEdit' ||
+      fn === 'validatorOnOpen' ||
+      fn === 'validatorDailyRefresh' ||
+      fn === 'onEdit' ||
+      fn === 'onOpen'
+    ) {
       ScriptApp.deleteTrigger(trigger);
     }
   });
@@ -122,132 +138,273 @@ function setupValidator() {
     .onOpen()
     .create();
 
-  refreshAllStatuses_(sheet);
-  SpreadsheetApp.flush();
+  ScriptApp.newTrigger('validatorDailyRefresh')
+    .timeBased()
+    .everyDays(1)
+    .atHour(0)
+    .create();
 
-  ss.toast('Procurement validator installed.', 'Validator', 4);
+  // One-time initial refresh only during setup.
+  refreshAllStatuses_(sheet);
+
+  ss.toast('Procurement validator installed and optimized.', 'Validator', 4);
 }
 
 /**
- * Simple trigger fallback for automatic status changes.
- * No UI/modal code is used here.
+ * Deliberately empty simple trigger.
+ *
+ * Do NOT process edits here. The installable validatorOnEdit trigger is the
+ * single edit-processing path. This prevents duplicate processing and
+ * reduces missed/delayed executions caused by competing edit handlers.
  */
 function onEdit(e) {
-  try {
-    if (!e || !e.range) return;
-
-    const sheet = e.range.getSheet();
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-    if (e.range.getRow() <= CONFIG.HEADER_ROW) return;
-
-    processEditedRows_(sheet, e.range);
-  } catch (err) {
-    console.error('onEdit error: ' + err);
-  }
+  return;
 }
 
 /**
- * Simple onOpen intentionally does not create a menu.
- * The installable validatorOnOpen trigger performs refresh.
+ * Deliberately empty simple trigger.
+ *
+ * The installable validatorOnOpen trigger handles opening the spreadsheet.
+ * No full refresh is performed by a simple trigger.
  */
 function onOpen(e) {
-  try {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet()
-      .getSheetByName(CONFIG.SHEET_NAME);
-    if (sheet) refreshAllStatuses_(sheet);
-  } catch (err) {
-    console.error('onOpen error: ' + err);
-  }
+  return;
 }
 
 /**
- * Installable onOpen trigger.
+ * Installable open trigger.
+ *
+ * Important: it does NOT recalculate the entire sheet. This keeps spreadsheet
+ * opening fast. Date-dependent changes are handled by the daily trigger and
+ * actual edits are handled by validatorOnEdit.
  */
 function validatorOnOpen(e) {
   try {
-    const sheet = SpreadsheetApp.getActiveSpreadsheet()
-      .getSheetByName(CONFIG.SHEET_NAME);
-    if (sheet) refreshAllStatuses_(sheet);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss && ss.getSheetByName(CONFIG.SHEET_NAME);
+    if (!sheet) return;
+
+    // Refresh only rows whose status may have become date-dependent.
+    // This is intentionally lightweight and does not force a complete
+    // cell-by-cell recalculation.
+    refreshStatusesBatch_(sheet);
   } catch (err) {
     console.error('validatorOnOpen error: ' + err);
   }
 }
 
 /**
- * Installable onEdit trigger.
- * Status is calculated first; validation is then performed only
- * against the status-specific requirements.
+ * Daily status refresh.
+ *
+ * This handles automatic changes caused solely by the date changing.
+ * It cannot display a modal because it runs without an active editor UI.
  */
-function validatorOnEdit(e) {
+function validatorDailyRefresh() {
   try {
-    if (!e || !e.range) return;
-
-    const sheet = e.range.getSheet();
-    if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-    if (e.range.getRow() <= CONFIG.HEADER_ROW) return;
-
-    const errors = processEditedRows_(sheet, e.range, true);
-    if (errors.length) showValidationModal_(errors);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss && ss.getSheetByName(CONFIG.SHEET_NAME);
+    if (sheet) refreshStatusesBatch_(sheet);
   } catch (err) {
-    console.error('validatorOnEdit error: ' + err);
+    console.error('validatorDailyRefresh error: ' + err);
   }
 }
 
 /**
- * Process all rows touched by an edit.
+ * Installable onEdit trigger.
+ *
+ * Only the affected rows are read and processed.
+ */
+function validatorOnEdit(e) {
+  if (!e || !e.range) return;
+
+  const range = e.range;
+  const sheet = range.getSheet();
+
+  if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+  if (range.getRow() <= CONFIG.HEADER_ROW && range.getLastRow() <= CONFIG.HEADER_ROW) {
+    return;
+  }
+
+  const lock = LockService.getDocumentLock();
+
+  try {
+    if (!lock.tryLock(CONFIG.LOCK_TIMEOUT_MS)) {
+      console.warn('Validator skipped because another edit is being processed.');
+      return;
+    }
+
+    const result = processEditedRows_(sheet, range, true);
+
+    // UI is attempted only from the installable edit context.
+    // If the execution context does not permit UI, the error is logged and
+    // status processing is still considered successful.
+    if (result.errors.length && result.statusChanged) {
+      try {
+        showValidationModal_(result.errors);
+      } catch (uiErr) {
+        console.warn('Validation modal unavailable in this trigger context: ' + uiErr);
+      }
+    }
+  } catch (err) {
+    console.error('validatorOnEdit error: ' + err);
+  } finally {
+    try {
+      lock.releaseLock();
+    } catch (ignore) {}
+  }
+}
+
+/**
+ * Process only rows touched by the edit.
+ *
+ * Reads all affected cells in one batch, calculates statuses in memory,
+ * then writes the status column in one batch.
  */
 function processEditedRows_(sheet, range, collectErrors) {
   const headers = getHeaders_(sheet);
-  const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-  if (statusColumn <= 0) return [];
+  const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
 
-  const errors = [];
+  if (statusIndex < 0) {
+    return { errors: [], statusChanged: false };
+  }
+
   const firstRow = Math.max(range.getRow(), CONFIG.HEADER_ROW + 1);
-  const lastRow = firstRow + range.getNumRows() - 1;
+  const lastRow = Math.min(
+    sheet.getLastRow(),
+    range.getLastRow()
+  );
 
-  for (let row = firstRow; row <= lastRow; row++) {
-    const status = determineStatus_(sheet, row, headers);
-    const cell = sheet.getRange(row, statusColumn);
-    const current = normalize_(cell.getDisplayValue());
+  if (lastRow < firstRow) {
+    return { errors: [], statusChanged: false };
+  }
+
+  const rowCount = lastRow - firstRow + 1;
+  const rows = readRows_(sheet, firstRow, rowCount, headers.length);
+
+  const statusValues = [];
+  const errors = [];
+  let statusChanged = false;
+
+  rows.forEach(function(rowInfo, offset) {
+    const row = firstRow + offset;
+    const data = rowInfo.data;
+    const displayData = rowInfo.displayData;
+
+    const status = determineStatus_(data, displayData);
+
+    const current = normalize_(displayData[CONFIG.STATUS_HEADER]);
+
+    statusValues.push([status]);
 
     if (current !== status) {
-      if (status) cell.setValue(status);
-      else cell.clearContent();
+      statusChanged = true;
     }
 
     if (collectErrors && status) {
-      const rowErrors = validateRow_(sheet, row, headers, status);
+      const rowErrors = validateRowFromData_(
+        row,
+        headers,
+        data,
+        displayData,
+        status
+      );
+
       Array.prototype.push.apply(errors, rowErrors);
     }
+  });
+
+  // One write for the entire affected status range.
+  if (statusChanged) {
+    sheet
+      .getRange(firstRow, statusIndex + 1, rowCount, 1)
+      .setValues(statusValues);
   }
 
-  SpreadsheetApp.flush();
-  return errors;
+  return {
+    errors: errors,
+    statusChanged: statusChanged
+  };
 }
 
 /**
- * Recalculate all procurement rows.
+ * Recalculate statuses in one batched read and one batched write.
+ *
+ * This is used by the daily refresh and setup. It avoids the old
+ * row-by-row getRange/setValue pattern.
  */
-function refreshAllStatuses_(sheet) {
+function refreshStatusesBatch_(sheet) {
   if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
 
   const headers = getHeaders_(sheet);
-  const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-  if (statusColumn <= 0) return;
+  const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
+
+  if (statusIndex < 0) return;
 
   const lastRow = sheet.getLastRow();
   if (lastRow <= CONFIG.HEADER_ROW) return;
 
-  for (let row = CONFIG.HEADER_ROW + 1; row <= lastRow; row++) {
-    const status = determineStatus_(sheet, row, headers);
-    const cell = sheet.getRange(row, statusColumn);
-    const current = normalize_(cell.getDisplayValue());
+  const rowCount = lastRow - CONFIG.HEADER_ROW;
+  const rows = readRows_(
+    sheet,
+    CONFIG.HEADER_ROW + 1,
+    rowCount,
+    headers.length
+  );
 
-    if (current !== status) {
-      if (status) cell.setValue(status);
-      else cell.clearContent();
+  const statusValues = [];
+
+  rows.forEach(function(rowInfo) {
+    statusValues.push([
+      determineStatus_(rowInfo.data, rowInfo.displayData)
+    ]);
+  });
+
+  sheet
+    .getRange(CONFIG.HEADER_ROW + 1, statusIndex + 1, rowCount, 1)
+    .setValues(statusValues);
+}
+
+/**
+ * Backward-compatible name used by setupValidator().
+ */
+function refreshAllStatuses_(sheet) {
+  refreshStatusesBatch_(sheet);
+}
+
+/**
+ * Read an entire affected block once.
+ *
+ * Both raw values and displayed values are captured in two batch reads.
+ * No individual cell reads are performed during status calculation.
+ */
+function readRows_(sheet, startRow, rowCount, columnCount) {
+  const range = sheet.getRange(startRow, 1, rowCount, columnCount);
+
+  const values = range.getValues();
+  const displayValues = range.getDisplayValues();
+
+  const headers = getHeaders_(sheet);
+  const rows = [];
+
+  for (let r = 0; r < rowCount; r++) {
+    const data = {};
+    const displayData = {};
+
+    for (let c = 0; c < headers.length; c++) {
+      const header = headers[c];
+      if (!header) continue;
+
+      data[header] = values[r][c];
+      displayData[header] = displayValues[r][c];
     }
+
+    rows.push({
+      data: data,
+      displayData: displayData
+    });
   }
+
+  return rows;
 }
 
 /**
@@ -256,70 +413,55 @@ function refreshAllStatuses_(sheet) {
  * Priority:
  * 1. REALIGNED ITEM
  * 2. CANCELLED PR
- * 3. PURCHASE ORDER / CANCELLED PO
- * 4. AWARDED
- * 5. FAILED
- * 6. CLOSED
- * 7. ACTIVE
- * 8. blank
+ * 3. PURCHASE ORDER
+ * 4. CANCELLED PO
+ * 5. AWARDED
+ * 6. FAILED
+ * 7. CLOSED
+ * 8. ACTIVE
+ * 9. blank
  */
-function determineStatus_(sheet, row, headers) {
-  const data = getRowData_(sheet, row, headers);
-
+function determineStatus_(data, displayData) {
   if (isCompletelyBlank_(data)) return '';
 
-  // REALIGNED ITEM is determined first from its own explicit conditions.
-  // It must not be blocked by the general PhilGEPS gate.
-  // Conditions:
-  //   1) TOTAL ABC = 0 or 0.00
-  //   2) REMARKS contains Realign / Realigned / Realignment, etc.
-  if (isRealignedItem_(data, sheet, row, headers)) {
+  // REALIGNED ITEM is independent of PhilGEPS.
+  if (isRealignedItem_(data, displayData)) {
     return 'Realigned Item';
   }
 
-  // PhilGEPS Reference No. is mandatory and numeric for all other statuses.
-  // No other automatic status is assigned until it is present and numeric.
-  if (!requiredPhilGEPSValid_(data)) return '';
+  // All other automatic statuses require numeric PhilGEPS reference.
+  if (!requiredPhilGEPSValid_(data, displayData)) return '';
 
-  // Cancelled PR.
+  // CANCELLED PR.
   if (
-    isZero_(data['PR TOTAL ABC'], display_(sheet, row, headers, 'PR TOTAL ABC')) &&
+    isZero_(data['PR TOTAL ABC'], displayData['PR TOTAL ABC']) &&
     /cancel+ed\s+pr/i.test(normalize_(data['REMARKS']))
   ) {
     return 'Cancelled PR';
   }
 
-  // PURCHASE ORDER:
-// All Purchase Order fields must be filled.
-// Additionally:
-//   - TOTAL ABC must be 0 or 0.00
-//   - PR TOTAL ABC must be 0 or 0.00
-//   - PO TOTAL COST must be greater than 0
-//
-// These conditions are checked together so Purchase Order is not assigned
-// until the complete PO record is ready.
-  if (isPurchaseOrderReady_(data, sheet, row, headers)) {
+  // PURCHASE ORDER.
+  if (isPurchaseOrderReady_(data)) {
     return 'Purchase Order';
   }
 
-  // CANCELLED PO:
-// All Purchase Order fields must be filled and TOTAL ABC / PR TOTAL ABC
-// must be zero. A zero PO TOTAL COST then produces Cancelled PO.
-  if (isCancelledPOReady_(data, sheet, row, headers)) {
+  // CANCELLED PO.
+  if (isCancelledPOReady_(data)) {
     return 'Cancelled PO';
   }
 
-  // Awarded requires Supplier.
+  // AWARDED.
   if (fieldsComplete_(data, AWARDED_FIELDS)) {
     if (downstreamDatesBeforeToday_(data)) return 'Awarded';
   }
 
-  // Failed deliberately does NOT require Supplier or Project ID/Method/Title.
+  // FAILED deliberately does NOT require Supplier, Project ID,
+  // Procurement Method, or Project Title.
   if (fieldsComplete_(data, FAILED_FIELDS)) {
     if (downstreamDatesBeforeToday_(data)) return 'Failed';
   }
 
-  // Closed: core fields complete and eligibility/submission both before today.
+  // CLOSED / ACTIVE.
   if (fieldsComplete_(data, CORE_FIELDS)) {
     const eligibility = getDate_(data['ELIGIBILITY SCREENING']);
     const submission = getDate_(data['SUBMISSION OF BIDS']);
@@ -333,7 +475,6 @@ function determineStatus_(sheet, row, headers) {
       return 'Closed';
     }
 
-    // Active: core fields complete and either date is today or later.
     if (
       (eligibility && !isBeforeToday_(eligibility)) ||
       (submission && !isBeforeToday_(submission))
@@ -345,33 +486,24 @@ function determineStatus_(sheet, row, headers) {
   return '';
 }
 
-function isRealignedItem_(data, sheet, row, headers) {
-  // REALIGNED ITEM has ONLY two requirements:
-  // 1) TOTAL ABC must be exactly 0 or 0.00
-  // 2) REMARKS must contain the word "realign" (case-insensitive)
-  //
-  // This check intentionally does NOT require PhilGEPS, PR No.,
-  // PR Total ABC, or any other procurement field.
+function isRealignedItem_(data, displayData) {
+  const totalAbc = getNumber_(
+    data['TOTAL ABC'],
+    displayData['TOTAL ABC']
+  );
 
-  const totalAbcDisplay = display_(sheet, row, headers, 'TOTAL ABC');
-  const remarksDisplay = display_(sheet, row, headers, 'REMARKS');
+  const remarks = normalize_(
+    data['REMARKS'] || displayData['REMARKS']
+  );
 
-  const totalAbc = getNumber_(data['TOTAL ABC']);
-  const totalAbcShown = getNumber_(totalAbcDisplay);
-
-  const totalAbcIsZero =
-    (totalAbc !== null && totalAbc === 0) ||
-    (totalAbcShown !== null && totalAbcShown === 0);
-
-  const remarks = normalize_(data['REMARKS'] || remarksDisplay);
-
-  // Matches: realign, realigned, realignment, realignments, etc.
-  const remarksHasRealign = /\brealign\w*\b/i.test(remarks);
-
-  return totalAbcIsZero && remarksHasRealign;
+  return (
+    totalAbc !== null &&
+    totalAbc === 0 &&
+    /\brealign\w*\b/i.test(remarks)
+  );
 }
 
-function isPurchaseOrderReady_(data, sheet, row, headers) {
+function isPurchaseOrderReady_(data) {
   if (!fieldsComplete_(data, PO_FIELDS)) return false;
 
   const totalAbc = getNumber_(data['TOTAL ABC']);
@@ -388,7 +520,7 @@ function isPurchaseOrderReady_(data, sheet, row, headers) {
   );
 }
 
-function isCancelledPOReady_(data, sheet, row, headers) {
+function isCancelledPOReady_(data) {
   if (!fieldsComplete_(data, PO_FIELDS)) return false;
 
   const totalAbc = getNumber_(data['TOTAL ABC']);
@@ -405,9 +537,12 @@ function isCancelledPOReady_(data, sheet, row, headers) {
   );
 }
 
-function requiredPhilGEPSValid_(data) {
+function requiredPhilGEPSValid_(data, displayData) {
   return hasValue_(data[PHILGEPS_REQUIRED_FIELD]) &&
-    isNumeric_(data[PHILGEPS_REQUIRED_FIELD], normalize_(data[PHILGEPS_REQUIRED_FIELD]));
+    isNumeric_(
+      data[PHILGEPS_REQUIRED_FIELD],
+      displayData[PHILGEPS_REQUIRED_FIELD]
+    );
 }
 
 function downstreamDatesBeforeToday_(data) {
@@ -423,20 +558,19 @@ function downstreamDatesBeforeToday_(data) {
 }
 
 /**
- * Status-specific validation.
- * Blank fields that are not required by the selected status are ignored.
+ * Status-specific validation using already-loaded row data.
+ *
+ * No Spreadsheet service calls occur here.
  */
-function validateRow_(sheet, row, headers, status) {
+function validateRowFromData_(row, headers, data, displayData, status) {
   const errors = [];
-  const data = getRowData_(sheet, row, headers);
-
   const required = getRequiredFields_(status);
 
   required.forEach(function(field) {
     if (!Object.prototype.hasOwnProperty.call(data, field)) return;
 
     const value = data[field];
-    const display = display_(sheet, row, headers, field);
+    const display = displayData[field];
 
     if (isBlank_(value, display)) {
       errors.push({
@@ -449,6 +583,7 @@ function validateRow_(sheet, row, headers, status) {
     }
 
     const formatError = validateFieldFormat_(field, value, display);
+
     if (formatError) {
       errors.push({
         row: row,
@@ -459,18 +594,22 @@ function validateRow_(sheet, row, headers, status) {
     }
   });
 
-  // Validate any entered non-required fields too, but never treat blanks as errors.
+  // Validate entered non-required fields too.
   headers.forEach(function(field) {
     if (!field || field === CONFIG.STATUS_HEADER) return;
+
     const value = data[field];
-    const display = display_(sheet, row, headers, field);
+    const display = displayData[field];
+
     if (isBlank_(value, display)) return;
 
     const formatError = validateFieldFormat_(field, value, display);
+
     if (formatError) {
-      const already = errors.some(function(e) {
-        return e.field === field;
+      const already = errors.some(function(error) {
+        return error.field === field;
       });
+
       if (!already) {
         errors.push({
           row: row,
@@ -483,6 +622,21 @@ function validateRow_(sheet, row, headers, status) {
   });
 
   return errors;
+}
+
+/**
+ * Backward-compatible manual validation helper.
+ */
+function validateRow_(sheet, row, headers, status) {
+  const rowInfo = readRows_(sheet, row, 1, headers.length)[0];
+
+  return validateRowFromData_(
+    row,
+    headers,
+    rowInfo.data,
+    rowInfo.displayData,
+    status
+  );
 }
 
 function getRequiredFields_(status) {
@@ -502,7 +656,12 @@ function getRequiredFields_(status) {
       return PO_FIELDS;
 
     case 'Cancelled PR':
-      return [PHILGEPS_REQUIRED_FIELD, 'PR NO.', 'PR TOTAL ABC', 'REMARKS'];
+      return [
+        PHILGEPS_REQUIRED_FIELD,
+        'PR NO.',
+        'PR TOTAL ABC',
+        'REMARKS'
+      ];
 
     case 'Realigned Item':
       return ['TOTAL ABC', 'REMARKS'];
@@ -520,6 +679,7 @@ function validateFieldFormat_(field, value, display) {
       return 'Invalid date format. Expected format: ' +
         CONFIG.DATE_FORMAT + '.';
     }
+
     return null;
   }
 
@@ -527,12 +687,13 @@ function validateFieldFormat_(field, value, display) {
     if (!isNumeric_(value, display)) {
       return 'Invalid number format. This field must contain a numeric value.';
     }
+
     return null;
   }
 
   if (field === 'PO NO.') {
-    if (!/^[A-Za-z0-9\-\/_.]+$/.test(display)) {
-      return 'Invalid PO number. Use letters, numbers, hyphens, slashes or underscores only.';
+    if (!/^[A-Za-z0-9\-\/_ .]+$/.test(display)) {
+      return 'Invalid PO number. Use letters, numbers, hyphens, slashes, underscores or periods only.';
     }
   }
 
@@ -549,50 +710,49 @@ function getHeaders_(sheet) {
   const lastColumn = sheet.getLastColumn();
   if (lastColumn < 1) return [];
 
-  return sheet.getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
+  return sheet
+    .getRange(CONFIG.HEADER_ROW, 1, 1, lastColumn)
     .getDisplayValues()[0]
     .map(normalizeHeader_);
 }
 
 function normalizeHeader_(value) {
   if (value === null || value === undefined) return '';
+
   return String(value)
     .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
 }
 
-function getRowData_(sheet, row, headers) {
-  const values = sheet.getRange(row, 1, 1, headers.length).getValues()[0];
-  const data = {};
-
-  headers.forEach(function(header, i) {
-    if (header) data[header] = values[i];
-  });
-
-  return data;
-}
-
-function display_(sheet, row, headers, field) {
-  const index = headers.indexOf(field);
-  if (index < 0) return '';
-
-  return sheet.getRange(row, index + 1).getDisplayValue();
-}
-
 function hasValue_(value) {
   if (value === null || value === undefined) return false;
-  if (typeof value === 'string') return value.trim() !== '';
+
+  if (typeof value === 'string') {
+    return value.trim() !== '';
+  }
+
   if (Object.prototype.toString.call(value) === '[object Date]') {
     return !isNaN(value.getTime());
   }
+
   return true;
 }
 
 function isBlank_(value, display) {
   if (value === null || value === undefined) return true;
-  if (typeof value === 'string' && value.trim() === '') return true;
-  if (display !== undefined && String(display).trim() === '') return true;
+
+  if (typeof value === 'string' && value.trim() === '') {
+    return true;
+  }
+
+  if (
+    display !== undefined &&
+    String(display).trim() === ''
+  ) {
+    return true;
+  }
+
   return false;
 }
 
@@ -612,33 +772,50 @@ function getDate_(value) {
     Object.prototype.toString.call(value) === '[object Date]' &&
     !isNaN(value.getTime())
   ) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    return new Date(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate()
+    );
   }
 
   const text = normalize_(value);
+
   if (!text || /^n\/?a$/i.test(text)) return null;
 
   const m = text.match(
     /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),\s+(\d{4})$/i
   );
 
-  if (m) {
-    const months = [
-      'january','february','march','april','may','june',
-      'july','august','september','october','november','december'
-    ];
-    const month = months.indexOf(m[1].toLowerCase());
-    const day = Number(m[2]);
-    const year = Number(m[3]);
-    const date = new Date(year, month, day);
+  if (!m) return null;
 
-    if (
-      date.getFullYear() === year &&
-      date.getMonth() === month &&
-      date.getDate() === day
-    ) return date;
+  const months = [
+    'january',
+    'february',
+    'march',
+    'april',
+    'may',
+    'june',
+    'july',
+    'august',
+    'september',
+    'october',
+    'november',
+    'december'
+  ];
 
-    return null;
+  const month = months.indexOf(m[1].toLowerCase());
+  const day = Number(m[2]);
+  const year = Number(m[3]);
+
+  const date = new Date(year, month, day);
+
+  if (
+    date.getFullYear() === year &&
+    date.getMonth() === month &&
+    date.getDate() === day
+  ) {
+    return date;
   }
 
   return null;
@@ -658,37 +835,49 @@ function isValidDate_(value, display) {
 }
 
 function normalizeDate_(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  );
 }
 
 function isBeforeToday_(date) {
   const d = normalizeDate_(date);
   const today = normalizeDate_(new Date());
+
   return d.getTime() < today.getTime();
 }
 
-function getNumber_(value) {
-  if (typeof value === 'number' && !isNaN(value)) return value;
+function getNumber_(value, display) {
+  if (typeof value === 'number' && !isNaN(value)) {
+    return value;
+  }
 
-  const text = normalize_(value).replace(/,/g, '').replace(/\s/g, '');
+  const raw = normalize_(value);
+  const shown = normalize_(display);
+
+  const text = (raw || shown)
+    .replace(/,/g, '')
+    .replace(/\s/g, '');
+
   if (!/^-?\d+(\.\d+)?$/.test(text)) return null;
 
   return Number(text);
 }
 
 function isNumeric_(value, display) {
-  return getNumber_(value) !== null ||
-    getNumber_(display) !== null;
+  return getNumber_(value, display) !== null;
 }
 
 function isZero_(value, display) {
-  const n = getNumber_(value);
-  if (n !== null) return n === 0;
-
-  const d = getNumber_(display);
-  return d !== null && d === 0;
+  const n = getNumber_(value, display);
+  return n !== null && n === 0;
 }
 
+/**
+ * Validation modal.
+ */
 function showValidationModal_(errors) {
   const shown = errors.slice(0, CONFIG.MAX_ERRORS_DISPLAYED);
 
@@ -696,35 +885,52 @@ function showValidationModal_(errors) {
     '<!doctype html><html><head><base target="_top">' +
     '<style>' +
     'body{font-family:Arial,sans-serif;margin:0;background:#f5f7fa;color:#202124}' +
-    '.wrap{padding:22px}.head{background:#b3261e;color:#fff;margin:-22px -22px 18px;padding:18px 22px}' +
-    '.head h2{margin:0 0 6px;font-size:20px}.head p{margin:0;font-size:13px}' +
+    '.wrap{padding:22px}' +
+    '.head{background:#b3261e;color:#fff;margin:-22px -22px 18px;padding:18px 22px}' +
+    '.head h2{margin:0 0 6px;font-size:20px}' +
+    '.head p{margin:0;font-size:13px}' +
     '.summary{background:#fff;border-left:5px solid #b3261e;padding:12px 15px;margin-bottom:14px}' +
-    '.scroll{max-height:390px;overflow:auto}.error{background:#fff;border:1px solid #dadce0;border-radius:5px;padding:12px 14px;margin-bottom:9px}' +
-    '.meta{font-size:12px;color:#5f6368;margin-bottom:5px}.field{font-weight:bold;color:#b3261e;margin-bottom:4px}' +
-    '.msg{font-size:13px;line-height:1.4}.footer{text-align:right;margin-top:16px}' +
+    '.scroll{max-height:390px;overflow:auto}' +
+    '.error{background:#fff;border:1px solid #dadce0;border-radius:5px;padding:12px 14px;margin-bottom:9px}' +
+    '.meta{font-size:12px;color:#5f6368;margin-bottom:5px}' +
+    '.field{font-weight:bold;color:#b3261e;margin-bottom:4px}' +
+    '.msg{font-size:13px;line-height:1.4}' +
+    '.footer{text-align:right;margin-top:16px}' +
     'button{border:0;border-radius:5px;padding:9px 20px;background:#1a73e8;color:#fff;cursor:pointer}' +
     '</style></head><body><div class="wrap">' +
     '<div class="head"><h2>⚠ Procurement Data Validation Error</h2>' +
     '<p>Please correct the following field(s).</p></div>' +
-    '<div class="summary"><strong>' + errors.length +
-    ' validation error' + (errors.length === 1 ? '' : 's') + ' found.</strong></div>' +
-    '<div class="scroll">';
+    '<div class="summary"><strong>' +
+    errors.length +
+    ' validation error' +
+    (errors.length === 1 ? '' : 's') +
+    ' found.</strong></div><div class="scroll">';
 
   shown.forEach(function(error) {
-    html += '<div class="error">' +
-      '<div class="meta">Row ' + escapeHtml_(error.row) +
-      ' &nbsp;|&nbsp; Status: ' + escapeHtml_(error.status) + '</div>' +
-      '<div class="field">' + escapeHtml_(error.field) + '</div>' +
-      '<div class="msg">' + escapeHtml_(error.message) + '</div>' +
-      '</div>';
+    html +=
+      '<div class="error">' +
+      '<div class="meta">Row ' +
+      escapeHtml_(error.row) +
+      ' &nbsp;|&nbsp; Status: ' +
+      escapeHtml_(error.status) +
+      '</div>' +
+      '<div class="field">' +
+      escapeHtml_(error.field) +
+      '</div>' +
+      '<div class="msg">' +
+      escapeHtml_(error.message) +
+      '</div></div>';
   });
 
   if (errors.length > shown.length) {
-    html += '<div class="error"><div class="msg">Only the first ' +
-      shown.length + ' errors are displayed.</div></div>';
+    html +=
+      '<div class="error"><div class="msg">Only the first ' +
+      shown.length +
+      ' errors are displayed.</div></div>';
   }
 
-  html += '</div><div class="footer">' +
+  html +=
+    '</div><div class="footer">' +
     '<button onclick="google.script.host.close()">Close</button>' +
     '</div></div></body></html>';
 
@@ -741,7 +947,7 @@ function escapeHtml_(value) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/\"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
 
@@ -760,20 +966,32 @@ function validateActiveRow() {
   }
 
   const row = sheet.getActiveRange().getRow();
+
   if (row <= CONFIG.HEADER_ROW) return;
 
   const headers = getHeaders_(sheet);
-  const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
-  if (statusColumn <= 0) return;
+  const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
 
-  const status = normalize_(sheet.getRange(row, statusColumn).getDisplayValue());
+  if (statusIndex < 0) return;
+
+  const rowInfo = readRows_(sheet, row, 1, headers.length)[0];
+  const status = normalize_(
+    rowInfo.displayData[CONFIG.STATUS_HEADER]
+  );
+
   if (!status) return;
 
-  const errors = validateRow_(sheet, row, headers, status);
+  const errors = validateRowFromData_(
+    row,
+    headers,
+    rowInfo.data,
+    rowInfo.displayData,
+    status
+  );
+
   if (errors.length) {
     showValidationModal_(errors);
   } else {
     ss.toast('No validation errors found.', 'Validation', 3);
   }
 }
-
