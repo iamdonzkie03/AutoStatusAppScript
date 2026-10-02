@@ -7,7 +7,7 @@
  * Run setupValidator() ONCE after installing/updating this code.
  *
  * Main improvements:
- * - One installable edit trigger only; no duplicate simple onEdit processing.
+ * - Simple onEdit provides a status-only fallback; installable onEdit handles validation.
  * - No full-sheet status refresh on every open.
  * - Batched row reads and status writes.
  * - No per-cell getDisplayValue() calls during status calculation/validation.
@@ -153,12 +153,29 @@ function setupValidator() {
 /**
  * Deliberately empty simple trigger.
  *
- * Do NOT process edits here. The installable validatorOnEdit trigger is the
- * single edit-processing path. This prevents duplicate processing and
- * reduces missed/delayed executions caused by competing edit handlers.
+ * This is a status-only fallback. It does not show the validation modal.
+ * The installable validatorOnEdit trigger additionally performs validation.
  */
 function onEdit(e) {
-  return;
+  // Fallback edit path so automatic status updates still work even when
+  // the installable trigger has not yet been recreated after a deployment.
+  // Keep this path status-only; validation modal handling remains in the
+  // installable validatorOnEdit trigger.
+  if (!e || !e.range) return;
+
+  const range = e.range;
+  const sheet = range.getSheet();
+
+  if (sheet.getName() !== CONFIG.SHEET_NAME) return;
+  if (range.getRow() <= CONFIG.HEADER_ROW && range.getLastRow() <= CONFIG.HEADER_ROW) {
+    return;
+  }
+
+  try {
+    processEditedRows_(sheet, range, false);
+  } catch (err) {
+    console.error('onEdit fallback error: ' + err);
+  }
 }
 
 /**
