@@ -11,8 +11,8 @@
  *   both before today.
  * - AWARDED: downstream award fields complete; Supplier required.
  * - FAILED: downstream award fields complete; Supplier NOT required.
- * - PURCHASE ORDER: all PO fields complete; TOTAL ABC = 0/0.00; PR TOTAL ABC = 0/0.00; PO TOTAL COST > 0.
- * - CANCELLED PO: all PO fields complete; TOTAL ABC = 0/0.00; PR TOTAL ABC = 0/0.00; PO TOTAL COST = 0/0.00.
+ * - PURCHASE ORDER: all PO fields complete and PO TOTAL COST > 0.
+ * - CANCELLED PO: all PO fields complete and PO TOTAL COST = 0/0.00.
  * - CANCELLED PR: PR TOTAL ABC = 0 and Remarks = Cancelled PR.
  * - REALIGNED ITEM: ONLY TOTAL ABC = 0/0.00 AND Remarks contains the word "realign".
  *
@@ -64,8 +64,6 @@ const FAILED_FIELDS = [
 ];
 
 const PO_FIELDS = AWARDED_FIELDS.concat([
-  'TOTAL ABC',
-  'PR TOTAL ABC',
   'NTP DATE',
   'PO NO.',
   'DATE PREPARED (PO)',
@@ -289,24 +287,13 @@ function determineStatus_(sheet, row, headers) {
     return 'Cancelled PR';
   }
 
-  // PURCHASE ORDER:
-// All Purchase Order fields must be filled.
-// Additionally:
-//   - TOTAL ABC must be 0 or 0.00
-//   - PR TOTAL ABC must be 0 or 0.00
-//   - PO TOTAL COST must be greater than 0
-//
-// These conditions are checked together so Purchase Order is not assigned
-// until the complete PO record is ready.
-  if (isPurchaseOrderReady_(data, sheet, row, headers)) {
-    return 'Purchase Order';
-  }
-
-  // CANCELLED PO:
-// All Purchase Order fields must be filled and TOTAL ABC / PR TOTAL ABC
-// must be zero. A zero PO TOTAL COST then produces Cancelled PO.
-  if (isCancelledPOReady_(data, sheet, row, headers)) {
-    return 'Cancelled PO';
+  // Purchase-order statuses require ALL PO fields first.
+  if (fieldsComplete_(data, PO_FIELDS)) {
+    const poCost = getNumber_(data['PO TOTAL COST']);
+    if (poCost !== null) {
+      if (poCost > 0) return 'Purchase Order';
+      if (poCost === 0) return 'Cancelled PO';
+    }
   }
 
   // Awarded requires Supplier.
@@ -369,40 +356,6 @@ function isRealignedItem_(data, sheet, row, headers) {
   const remarksHasRealign = /\brealign\w*\b/i.test(remarks);
 
   return totalAbcIsZero && remarksHasRealign;
-}
-
-function isPurchaseOrderReady_(data, sheet, row, headers) {
-  if (!fieldsComplete_(data, PO_FIELDS)) return false;
-
-  const totalAbc = getNumber_(data['TOTAL ABC']);
-  const prTotalAbc = getNumber_(data['PR TOTAL ABC']);
-  const poTotalCost = getNumber_(data['PO TOTAL COST']);
-
-  return (
-    totalAbc !== null &&
-    totalAbc === 0 &&
-    prTotalAbc !== null &&
-    prTotalAbc === 0 &&
-    poTotalCost !== null &&
-    poTotalCost > 0
-  );
-}
-
-function isCancelledPOReady_(data, sheet, row, headers) {
-  if (!fieldsComplete_(data, PO_FIELDS)) return false;
-
-  const totalAbc = getNumber_(data['TOTAL ABC']);
-  const prTotalAbc = getNumber_(data['PR TOTAL ABC']);
-  const poTotalCost = getNumber_(data['PO TOTAL COST']);
-
-  return (
-    totalAbc !== null &&
-    totalAbc === 0 &&
-    prTotalAbc !== null &&
-    prTotalAbc === 0 &&
-    poTotalCost !== null &&
-    poTotalCost === 0
-  );
 }
 
 function requiredPhilGEPSValid_(data) {
