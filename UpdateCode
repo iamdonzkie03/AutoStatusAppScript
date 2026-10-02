@@ -7,7 +7,7 @@
  * Run setupValidator() ONCE after installing/updating this code.
  *
  * Main improvements:
- * - Simple onEdit provides a status-only fallback; installable onEdit handles validation.
+ * - Simple onEdit is the single automatic status-processing path.
  * - No full-sheet status refresh on every open.
  * - Batched row reads and status writes.
  * - No per-cell getDisplayValue() calls during status calculation/validation.
@@ -102,9 +102,8 @@ const NUMERIC_FIELDS = [
 /**
  * Run once after installing/updating the code.
  * Removes old validator triggers and creates exactly:
- *   1. installable onEdit
- *   2. installable onOpen
- *   3. daily time-driven refresh
+ *   1. installable onOpen
+ *   2. daily time-driven refresh
  */
 function setupValidator() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -128,11 +127,8 @@ function setupValidator() {
     }
   });
 
-  ScriptApp.newTrigger('validatorOnEdit')
-    .forSpreadsheet(ss)
-    .onEdit()
-    .create();
-
+  // Automatic status updates are handled by the simple onEdit trigger.
+  // This avoids duplicate processing of every edit.
   ScriptApp.newTrigger('validatorOnOpen')
     .forSpreadsheet(ss)
     .onOpen()
@@ -154,27 +150,36 @@ function setupValidator() {
  * Deliberately empty simple trigger.
  *
  * This is a status-only fallback. It does not show the validation modal.
- * The installable validatorOnEdit trigger additionally performs validation.
+ * Validation remains available through the manual validator and existing
+ * validation functions. Automatic status calculation is intentionally kept
+ * in this lightweight trigger for speed.
  */
 function onEdit(e) {
-  // Fallback edit path so automatic status updates still work even when
-  // the installable trigger has not yet been recreated after a deployment.
-  // Keep this path status-only; validation modal handling remains in the
-  // installable validatorOnEdit trigger.
   if (!e || !e.range) return;
 
   const range = e.range;
   const sheet = range.getSheet();
 
   if (sheet.getName() !== CONFIG.SHEET_NAME) return;
-  if (range.getRow() <= CONFIG.HEADER_ROW && range.getLastRow() <= CONFIG.HEADER_ROW) {
-    return;
-  }
+
+  // Ignore header-only edits.
+  if (range.getLastRow() <= CONFIG.HEADER_ROW) return;
 
   try {
-    processEditedRows_(sheet, range, false);
+    const headers = getHeadersCached_(sheet);
+    const statusIndex = headers.indexOf(CONFIG.STATUS_HEADER);
+
+    if (statusIndex < 0) return;
+
+    // Process only the rows actually touched by the edit.
+    const firstRow = Math.max(range.getRow(), CONFIG.HEADER_ROW + 1);
+    const lastRow = range.getLastRow();
+
+    for (let row = firstRow; row <= lastRow; row++) {
+      processSingleRowFast_(sheet, row, headers, statusIndex);
+    }
   } catch (err) {
-    console.error('onEdit fallback error: ' + err);
+    console.error('onEdit status error: ' + err);
   }
 }
 
@@ -261,6 +266,60 @@ function validatorOnEdit(e) {
     try {
       lock.releaseLock();
     } catch (ignore) {}
+  }
+}
+
+/**
+ * Fast header lookup.
+ *
+ * Headers change rarely, so cache them briefly instead of reading row 1
+ * from Sheets on every edit.
+ */
+function getHeadersCached_(sheet) {
+  const cache = CacheService.getScriptCache();
+  const key = 'validator_headers_' + sheet.getSheetId();
+  const cached = cache.get(key);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (ignore) {}
+  }
+
+  const headers = getHeaders_(sheet);
+  cache.put(key, JSON.stringify(headers), 21600);
+  return headers;
+}
+
+/**
+ * Fast single-row status calculation.
+ *
+ * For an ordinary edit this performs:
+ *   - one row read
+ *   - one status write only when the status actually changes
+ *
+ * It never reads rows 1..N just because the edited row is large.
+ */
+function processSingleRowFast_(sheet, row, headers, statusIndex) {
+  const rowRange = sheet.getRange(row, 1, 1, headers.length);
+  const values = rowRange.getValues()[0];
+  const displayValues = rowRange.getDisplayValues()[0];
+
+  const data = {};
+  const displayData = {};
+
+  for (let c = 0; c < headers.length; c++) {
+    const field = headers[c];
+    if (!field) continue;
+    data[field] = values[c];
+    displayData[field] = displayValues[c];
+  }
+
+  const status = determineStatus_(data, displayData);
+  const currentStatus = normalize_(displayData[CONFIG.STATUS_HEADER]);
+
+  if (currentStatus !== status) {
+    sheet.getRange(row, statusIndex + 1).setValue(status);
   }
 }
 
