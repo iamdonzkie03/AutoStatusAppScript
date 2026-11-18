@@ -243,6 +243,7 @@ function validateDeliveryCompletionRules_(sheet, editedRange) {
   const FIRST_DATA_ROW = CONFIG.HEADER_ROW + 1;
   const CATEGORY_COLUMN = 3;   // C
   const CODE_COLUMN = 1;       // A
+  const STATUS_COLUMN = 61;    // BI
   const DELIVERY_COLUMN = 59;  // BG
   const TITLE_COLUMN = 65;     // BM
 
@@ -254,11 +255,11 @@ function validateDeliveryCompletionRules_(sheet, editedRange) {
     'CATERING SERVICES': true
   };
 
-  // Run only when one of the four relevant columns is part of the edit.
+  // Validate when an edit touches any field that can affect these rules.
   const firstCol = editedRange.getColumn();
   const lastCol = firstCol + editedRange.getNumColumns() - 1;
   const relevantColumns = [
-    CODE_COLUMN, CATEGORY_COLUMN, DELIVERY_COLUMN, TITLE_COLUMN
+    CODE_COLUMN, CATEGORY_COLUMN, STATUS_COLUMN, DELIVERY_COLUMN, TITLE_COLUMN
   ];
   const relevantEdit = relevantColumns.some(function(col) {
     return col >= firstCol && col <= lastCol;
@@ -272,6 +273,8 @@ function validateDeliveryCompletionRules_(sheet, editedRange) {
   const categories = sheet.getRange(FIRST_DATA_ROW, CATEGORY_COLUMN, rowCount, 1)
     .getDisplayValues();
   const codes = sheet.getRange(FIRST_DATA_ROW, CODE_COLUMN, rowCount, 1)
+    .getDisplayValues();
+  const statuses = sheet.getRange(FIRST_DATA_ROW, STATUS_COLUMN, rowCount, 1)
     .getDisplayValues();
   const deliveries = sheet.getRange(FIRST_DATA_ROW, DELIVERY_COLUMN, rowCount, 1)
     .getValues();
@@ -297,12 +300,23 @@ function validateDeliveryCompletionRules_(sheet, editedRange) {
     return clean(display);
   }
 
+  function normalizedStatus(value) {
+    const status = clean(value);
+    // The sheet's automatic status label is "Purchase Order".
+    // Accept "PURCHASE" as an equivalent label if that is what BI contains.
+    if (status === 'PURCHASE') return 'PURCHASE ORDER';
+    return status;
+  }
+
   const duplicateCounts = {};
   const rowKeys = [];
 
   for (let i = 0; i < rowCount; i++) {
     const category = clean(categories[i][0]);
-    if (!allowedCategories[category]) {
+    const status = normalizedStatus(statuses[i][0]);
+
+    if (!allowedCategories[category] ||
+        (status !== 'AWARDED' && status !== 'PURCHASE ORDER')) {
       rowKeys[i] = '';
       continue;
     }
@@ -316,7 +330,9 @@ function validateDeliveryCompletionRules_(sheet, editedRange) {
       continue;
     }
 
-    const key = JSON.stringify([code, title, delivery]);
+    // Status is part of the duplicate key, so Awarded and Purchase Order
+    // records are checked separately and do not conflict with each other.
+    const key = JSON.stringify([code, title, status, delivery]);
     rowKeys[i] = key;
     duplicateCounts[key] = (duplicateCounts[key] || 0) + 1;
   }
@@ -333,22 +349,34 @@ function validateDeliveryCompletionRules_(sheet, editedRange) {
     const category = clean(categories[i][0]);
     if (!allowedCategories[category]) continue;
 
+    // Blank date validation applies to all rows in the selected categories,
+    // regardless of their current status.
     if (!clean(deliveryDisplays[i][0])) {
       errors.push({
         row: row,
-        status: 'Delivery/Completion Validation',
+        status: normalizedStatus(statuses[i][0]) || 'Not assigned',
         field: 'Delivery/Completion (Column BG)',
         message: 'The Delivery/Completion date is blank. Please enter the date in Column BG.'
       });
       continue;
     }
 
-    if (rowKeys[i] && duplicateCounts[rowKeys[i]] > 1) {
+    const status = normalizedStatus(statuses[i][0]);
+    if (!rowKeys[i] || duplicateCounts[rowKeys[i]] <= 1) continue;
+
+    if (status === 'AWARDED') {
       errors.push({
         row: row,
-        status: 'Delivery/Completion Validation',
+        status: 'Awarded',
         field: 'Delivery/Completion (Column BG)',
-        message: 'The Delivery/Completion date for the specific activity contains duplicate entries. Please check the delivery/completion date.'
+        message: 'The Delivery/Completion date for the the specific activity contains duplicate entries under the Awarded status. Please check the delivery/completion date.'
+      });
+    } else if (status === 'PURCHASE ORDER') {
+      errors.push({
+        row: row,
+        status: 'Purchase Order',
+        field: 'Delivery/Completion (Column BG)',
+        message: 'The Delivery/Completion date for the the specific activity contains duplicate entries under the Purchase Order status. Please check the delivery/completion date.'
       });
     }
   }
