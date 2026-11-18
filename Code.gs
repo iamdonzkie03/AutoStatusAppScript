@@ -229,6 +229,9 @@ function processEditedRows_(sheet, range, collectErrors) {
 function refreshAllStatuses_(sheet) {
   if (!sheet || sheet.getName() !== CONFIG.SHEET_NAME) return;
 
+  // Keep duplicate Delivery/Completion highlighting active.
+  ensureDuplicateDeliveryCompletionRule_(sheet);
+
   const headers = getHeaders_(sheet);
   const statusColumn = headers.indexOf(CONFIG.STATUS_HEADER) + 1;
   if (statusColumn <= 0) return;
@@ -247,6 +250,56 @@ function refreshAllStatuses_(sheet) {
     }
   }
 }
+
+/**
+ * Highlight duplicate Delivery/Completion values in column BG.
+ *
+ * A BG cell is highlighted red when:
+ *  - BG contains a value;
+ *  - Code/PAP in column A matches another row;
+ *  - Project Title in column BM matches that same row; and
+ *  - Delivery/Completion in BG is also the same.
+ *
+ * Conditional formatting makes this dynamic: changes to A, BG, or BM
+ * immediately recalculate the highlights without another script trigger.
+ */
+function ensureDuplicateDeliveryCompletionRule_(sheet) {
+  const formula =
+    '=AND($BG2<>"",$A2<>"",$BM2<>"",COUNTIFS($A$2:$A,$A2,$BM$2:$BM,$BM2,$BG$2:$BG,$BG2)>1)';
+
+  const targetRange = sheet.getRange('BG2:BG');
+  const rules = sheet.getConditionalFormatRules();
+
+  // Avoid adding the same rule every time the spreadsheet is opened.
+  const alreadyExists = rules.some(function(rule) {
+    const condition = rule.getBooleanCondition();
+    if (!condition) return false;
+
+    if (condition.getCriteriaType() !==
+        SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA) {
+      return false;
+    }
+
+    const criteria = condition.getCriteriaValues();
+    return criteria &&
+      String(criteria[0]).replace(/\\s+/g, '') ===
+      formula.replace(/\\s+/g, '');
+  });
+
+  if (alreadyExists) return;
+
+  const duplicateRule = SpreadsheetApp.newConditionalFormatRule()
+    .whenFormulaSatisfied(formula)
+    .setBackground('#ff0000')
+    .setRanges([targetRange])
+    .build();
+
+  // Put the duplicate warning rule first so the red fill is visible.
+  sheet.setConditionalFormatRules(
+    [duplicateRule].concat(rules)
+  );
+}
+
 
 /**
  * Determine exactly one automatic status.
