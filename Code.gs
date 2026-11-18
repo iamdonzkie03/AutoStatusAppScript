@@ -185,6 +185,10 @@ function validatorOnEdit(e) {
     if (e.range.getRow() <= CONFIG.HEADER_ROW) return;
 
     const errors = processEditedRows_(sheet, e.range, true);
+    Array.prototype.push.apply(
+      errors,
+      validateDeliveryCompletionRules_(sheet, e.range)
+    );
     if (errors.length) showValidationModal_(errors);
   } catch (err) {
     console.error('validatorOnEdit error: ' + err);
@@ -220,6 +224,135 @@ function processEditedRows_(sheet, range, collectErrors) {
   }
 
   SpreadsheetApp.flush();
+  return errors;
+}
+
+/**
+ * Validate Delivery/Completion dates for the specified activity categories.
+ *
+ * Column C: Category
+ * Column A: Code/PAP
+ * Column BG: Delivery/Completion
+ * Column BM: Project Title
+ *
+ * A blank BG value is an error. A duplicate is an error when A, BG and BM
+ * match another row and the current row belongs to one of the listed categories.
+ * The installable onEdit trigger displays these errors in a modal dialog.
+ */
+function validateDeliveryCompletionRules_(sheet, editedRange) {
+  const FIRST_DATA_ROW = CONFIG.HEADER_ROW + 1;
+  const CATEGORY_COLUMN = 3;   // C
+  const CODE_COLUMN = 1;       // A
+  const DELIVERY_COLUMN = 59;  // BG
+  const TITLE_COLUMN = 65;     // BM
+
+  const allowedCategories = {
+    'SNACKS': true,
+    'VENUE AND CATERING': true,
+    'MEALS & SNACKS': true,
+    'HOTEL, LODGING AND MEETING FACILITIES': true,
+    'CATERING SERVICES': true
+  };
+
+  // Run only when one of the four relevant columns is part of the edit.
+  const firstCol = editedRange.getColumn();
+  const lastCol = firstCol + editedRange.getNumColumns() - 1;
+  const relevantColumns = [
+    CODE_COLUMN, CATEGORY_COLUMN, DELIVERY_COLUMN, TITLE_COLUMN
+  ];
+  const relevantEdit = relevantColumns.some(function(col) {
+    return col >= firstCol && col <= lastCol;
+  });
+  if (!relevantEdit) return [];
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < FIRST_DATA_ROW) return [];
+
+  const rowCount = lastRow - FIRST_DATA_ROW + 1;
+  const categories = sheet.getRange(FIRST_DATA_ROW, CATEGORY_COLUMN, rowCount, 1)
+    .getDisplayValues();
+  const codes = sheet.getRange(FIRST_DATA_ROW, CODE_COLUMN, rowCount, 1)
+    .getDisplayValues();
+  const deliveries = sheet.getRange(FIRST_DATA_ROW, DELIVERY_COLUMN, rowCount, 1)
+    .getValues();
+  const deliveryDisplays = sheet.getRange(FIRST_DATA_ROW, DELIVERY_COLUMN, rowCount, 1)
+    .getDisplayValues();
+  const titles = sheet.getRange(FIRST_DATA_ROW, TITLE_COLUMN, rowCount, 1)
+    .getDisplayValues();
+
+  function clean(value) {
+    return String(value === null || value === undefined ? '' : value)
+      .replace(/\\s+/g, ' ')
+      .trim()
+      .toUpperCase();
+  }
+
+  function deliveryKey(value, display) {
+    if (Object.prototype.toString.call(value) === '[object Date]' &&
+        !isNaN(value.getTime())) {
+      return String(value.getFullYear()) + '-' +
+        String(value.getMonth() + 1).padStart(2, '0') + '-' +
+        String(value.getDate()).padStart(2, '0');
+    }
+    return clean(display);
+  }
+
+  const duplicateCounts = {};
+  const rowKeys = [];
+
+  for (let i = 0; i < rowCount; i++) {
+    const category = clean(categories[i][0]);
+    if (!allowedCategories[category]) {
+      rowKeys[i] = '';
+      continue;
+    }
+
+    const code = clean(codes[i][0]);
+    const title = clean(titles[i][0]);
+    const delivery = deliveryKey(deliveries[i][0], deliveryDisplays[i][0]);
+
+    if (!code || !title || !delivery) {
+      rowKeys[i] = '';
+      continue;
+    }
+
+    const key = JSON.stringify([code, title, delivery]);
+    rowKeys[i] = key;
+    duplicateCounts[key] = (duplicateCounts[key] || 0) + 1;
+  }
+
+  const firstEditedRow = Math.max(editedRange.getRow(), FIRST_DATA_ROW);
+  const lastEditedRow = Math.min(
+    editedRange.getRow() + editedRange.getNumRows() - 1,
+    lastRow
+  );
+  const errors = [];
+
+  for (let row = firstEditedRow; row <= lastEditedRow; row++) {
+    const i = row - FIRST_DATA_ROW;
+    const category = clean(categories[i][0]);
+    if (!allowedCategories[category]) continue;
+
+    if (!clean(deliveryDisplays[i][0])) {
+      errors.push({
+        row: row,
+        status: 'Delivery/Completion Validation',
+        field: 'Delivery/Completion (Column BG)',
+        message: 'The Delivery/Completion date is blank. Please enter the date in Column BG.'
+      });
+      continue;
+    }
+
+    if (rowKeys[i] && duplicateCounts[rowKeys[i]] > 1) {
+      errors.push({
+        row: row,
+        status: 'Delivery/Completion Validation',
+        field: 'Delivery/Completion (Column BG)',
+        message: 'The Delivery/Completion date for the specific activity contains duplicate entries. Please check the delivery/completion date.'
+      });
+    }
+  }
+
   return errors;
 }
 
